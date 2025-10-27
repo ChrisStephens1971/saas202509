@@ -5,6 +5,17 @@
 
 ---
 
+## 🏦 This is a Multi-Tenant HOA Accounting System Project
+
+**Essential Reading (Start Here):**
+1. **ACCOUNTING-PROJECT-QUICKSTART.md** - Get oriented in 10 minutes
+2. **product/HOA-PAIN-POINTS-AND-REQUIREMENTS.md** - What we're building (30 min)
+3. **technical/architecture/MULTI-TENANT-ACCOUNTING-ARCHITECTURE.md** - How we're building it (2 hours)
+
+This project builds fund-based accounting for HOAs with **zero tolerance for financial errors**.
+
+---
+
 ## 🎉 Your Project is Ready!
 
 This project has been created with a complete planning and documentation structure. Everything you need to plan, build, and ship your SaaS is here.

@@ -23,6 +23,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ---
 
+## 🏦 PROJECT CONTEXT: Multi-Tenant HOA Accounting System
+
+**Domain:** Multi-tenant fund accounting for Homeowners Associations
+**Key Constraint:** Zero tolerance for financial errors (audit-grade accuracy required)
+**Architecture:** Schema-per-tenant, event-sourced, immutable ledger
+**Timeline:** 7-10 months to MVP, plus 6-12 months of bug fixes
+
+**Essential Documentation:**
+- **`ACCOUNTING-PROJECT-QUICKSTART.md`** - Week 1 guide and accounting fundamentals (START HERE)
+- **`product/HOA-PAIN-POINTS-AND-REQUIREMENTS.md`** - 10 pain points and requirements (30 min)
+- **`technical/architecture/MULTI-TENANT-ACCOUNTING-ARCHITECTURE.md`** - Complete technical architecture (2 hours)
+
+**When user says "help me get started":** Direct them to `ACCOUNTING-PROJECT-QUICKSTART.md` first to understand the accounting domain before diving into roadmaps.
+
+**Special Requirements:**
+- Use NUMERIC(15,2) for all money fields (never floats)
+- Use DATE (not TIMESTAMPTZ) for accounting dates
+- All financial records are immutable (INSERT only, never UPDATE/DELETE)
+- Every journal entry must balance (debits = credits)
+
+---
+
 ## 🎯 IMPORTANT: First-Time Project Detection
 
 **Project ID:** saas202509
@@ -128,8 +150,8 @@ After gathering answers:
 ### Step 5: Register Project Details
 
 **If user provided a trade name or description during planning:**
-- Update projects workbook: `C:\Users\Chris Stephens\OneDrive - mylawnsupport.com\Desktop\saas-projects.xlsx`
-- Use xlsx skill to update the row for this project
+- Update projects database: `C:\devop\.config\verdaio-dashboard.db`
+- Use Python script to update the project record
 - Change "TBD" to actual trade name
 - Add description
 
@@ -317,10 +339,10 @@ npx claude-code-templates@latest --command testing/generate-tests
 3. Identify: completed items, in-progress, blockers
 4. Recommend next steps based on roadmap
 5. Offer to update weekly review
-6. **If project info changes** (trade name chosen, status, description) → Update projects workbook
+6. **If project info changes** (trade name chosen, status, description) → Update projects database
 
-**Projects Workbook:** `C:\Users\Chris Stephens\OneDrive - mylawnsupport.com\Desktop\saas-projects.xlsx`
-**Use xlsx skill** to read and update the workbook
+**Projects Database:** `C:\devop\.config\verdaio-dashboard.db`
+**Use Python script** with sqlite3 module to update the project record
 
 **Delegation:** For task tracking → Suggest Linear (`.config/linear-config.json`) or ClickUp (`.config/clickup-config.json`) integration. Both can be used together.
 
@@ -557,10 +579,10 @@ Advanced specialists:
 - Linear integration: `.config/linear-config.json` (guide: `.config/linear-integration-guide.md`)
 - **Note:** Both ClickUp and Linear can be enabled simultaneously (complementary tools)
 - Projects registry: `.config/projects.json`
-- **Projects Workbook**: `C:\Users\Chris Stephens\OneDrive - mylawnsupport.com\Desktop\saas-projects.xlsx`
-  - Contains: Project ID, Project Name, Trade Name, Created Date, Status, Description, Linear ID, Linear URL
+- **Projects Database**: `C:\devop\.config\verdaio-dashboard.db`
+  - Contains: projectId, projectName, tradeName, createdDate, status, description, linearProjectId, linearProjectUrl, templateType, projectPath, ports (frontend, backend, postgres, redis, mongo), phase percentages
   - **Update when**: Trade name is chosen, project status changes, description needs updating, or Linear project is created
-  - **How to update**: Use xlsx skill to read, update relevant row, and save
+  - **How to update**: Use Python script with sqlite3 module to update the project record
 
 **Task notifications:**
 - **Email notification system**: `C:\devop\scripts\` (PowerShell)
