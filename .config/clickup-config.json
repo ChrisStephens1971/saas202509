@@ -1,0 +1,40 @@
+{
+  "apiKey": "{{CLICKUP_API_KEY}}",
+  "enabled": true,
+  "autoCreateWorkspace": false,
+  "defaultTeamId": null,
+  "projectMappings": {
+    "saas202501": {
+      "teamId": null,
+      "teamName": null,
+      "spaceId": null
+    },
+    "saas202502": {
+      "teamId": null,
+      "teamName": null,
+      "spaceId": null
+    },
+    "saas202503": {
+      "teamId": null,
+      "teamName": null,
+      "spaceId": null
+    },
+    "saas202504": {
+      "teamId": null,
+      "teamName": null,
+      "spaceId": null
+    }
+  },
+  "syncSettings": {
+    "syncSprints": true,
+    "syncPRDs": false,
+    "syncRoadmaps": false,
+    "autoCreateTasks": false
+  },
+  "notes": [
+    "API Key: Get from ClickUp Settings > Apps > API Token",
+    "Team ID: Your ClickUp workspace ID",
+    "Space ID: Optional - specific space within a team",
+    "autoCreateWorkspace: Set to true to auto-create ClickUp workspace on project creation"
+  ]
+}

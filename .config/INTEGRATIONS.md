@@ -1,0 +1,193 @@
+# Integration Guide
+
+**Project:** saas202509
+**Template Version:** 2.0
+
+This document covers optional external tool integrations for your SaaS project.
+
+---
+
+## 🎯 Quick Answer
+
+**Your templates work standalone - no integrations required!**
+
+When you're ready to code, consider **Claude Code Templates** for technical implementation.
+
+Everything else is optional and situational.
+
+---
+
+## Integration Overview
+
+| What | When | Priority |
+|------|------|----------|
+| **Built-in Templates** | Always available | ✅ Core |
+| **Claude Code Templates** | When coding | ⭐ Recommended |
+| **Claude Skills** | Working with documents | Optional |
+| **Linear/ClickUp** | Team collaboration | Optional |
+
+---
+
+## 🚀 Tier 1: Claude Code Templates (Recommended)
+
+**What it is:** 163 specialized development agents and 210 commands for technical implementation.
+
+**When to use:** When you're ready to start coding and need technical assistance.
+
+**Why recommended:** Purpose-built for development tasks, comprehensive coverage, well-documented.
+
+### Quick Setup
+```bash
+# Install on-demand as needed
+npx claude-code-templates@latest --agent development-team/frontend-developer
+npx claude-code-templates@latest --agent development-team/backend-architect
+npx claude-code-templates@latest --command testing/generate-tests
+```
+
+### Common Use Cases
+- **Frontend:** `--agent development-team/frontend-developer`
+- **Backend APIs:** `--agent development-team/backend-architect`
+- **Full-stack:** `--agent development-team/fullstack-developer`
+- **Testing:** `--command testing/generate-tests`
+- **Security:** `--agent security/security-auditor`
+- **Database:** `--agent database/database-architect`
+- **DevOps:** `--agent devops-infrastructure/devops-engineer`
+
+### Full Documentation
+See `.config/claude-code-templates-guide.md` for complete reference.
+
+---
+
+## 📦 Tier 2: Optional Tools
+
+### Claude Skills
+
+**What:** Specialized capabilities for documents and specific tasks.
+
+**When:** Working with PDFs, spreadsheets, presentations, or specialized workflows.
+
+**Setup:**
+```bash
+/plugin marketplace add anthropics/skills
+```
+
+**Available:**
+- `pdf` - PDF creation, extraction, form filling
+- `xlsx` - Spreadsheet creation, editing, analysis
+- `docx` - Document creation and editing
+- `pptx` - Presentation creation
+- `webapp-testing` - Browser testing
+
+**Full guide:** `.config/recommended-claude-skills.md`
+
+---
+
+### Linear
+
+**What:** Modern issue tracker and project management.
+
+**When:** Team collaboration, sprint tracking, roadmap visualization.
+
+**Status:** {{#if LINEAR_PROJECT_ID}}✅ Configured{{else}}Not configured{{/if}}
+
+{{#if LINEAR_PROJECT_ID}}
+**Your project:** {{LINEAR_PROJECT_URL}}
+{{else}}
+**Setup:**
+1. Get API key from https://linear.app/settings/api
+2. Update `C:\devop\.config\linear-config.json`
+3. Set `autoCreateProjects: true`
+{{/if}}
+
+**Full guide:** `.config/linear-integration-guide.md`
+
+---
+
+### ClickUp
+
+**What:** All-in-one project management platform.
+
+**When:** Task management, team collaboration, time tracking.
+
+**Note:** Complements Linear - you can use both.
+
+**Full guide:** `.config/clickup-integration-guide.md`
+
+---
+
+## 🎯 Recommended Setup Path
+
+### Solo Founders (MVP)
+1. **Start:** Built-in templates (no setup)
+2. **When coding:** Claude Code Templates
+3. **Optional:** Linear for task tracking
+
+### Small Teams (2-5 people)
+1. **Start:** Built-in templates
+2. **When coding:** Claude Code Templates
+3. **For collaboration:** Linear or ClickUp
+4. **Optional:** Skills for documents
+
+### Enterprise Teams
+1. **Start:** Built-in templates
+2. **Setup:** Claude Code Templates + Linear
+3. **Add:** Skills for office documents
+4. **Consider:** Advanced specialized tools (see below)
+
+---
+
+## 🔧 Advanced Specialists
+
+**Need framework-specific or domain-specific tools?**
+
+See `docs/advanced/SPECIALIZED-TOOLS.md` for:
+- Framework specialists (Django, FastAPI, GraphQL)
+- Payment integration (Stripe, PayPal)
+- AI/ML features (LangChain, RAG)
+- SEO & content marketing
+- Other specialized domains
+
+**Most projects won't need these** - but they're available if you do.
+
+---
+
+## 🔄 Integration Priority
+
+**Essential (Always):**
+- Built-in templates ← You already have this
+
+**High Value (When Coding):**
+- Claude Code Templates
+
+**Nice to Have (Optional):**
+- Linear or ClickUp (if working with team)
+- Claude Skills (if working with documents)
+- Specialized tools (only for specific needs)
+
+---
+
+## ❓ Questions?
+
+Just ask Claude:
+- "How do I set up Claude Code Templates?"
+- "Should I use Linear or ClickUp?"
+- "Install the frontend developer agent"
+- "Do I need any integrations for my MVP?"
+
+---
+
+## 📚 Related Documentation
+
+**In .config/:**
+- `claude-code-templates-guide.md` - Complete technical reference
+- `recommended-claude-skills.md` - Skills catalog
+- `linear-integration-guide.md` - Linear setup
+- `clickup-integration-guide.md` - ClickUp setup
+
+**In docs/:**
+- `docs/advanced/SPECIALIZED-TOOLS.md` - Advanced specialists
+
+---
+
+**Last Updated:** 2025-10-27
+**Template Version:** 2.0

@@ -1,0 +1,25 @@
+{
+  "projectId": "saas202509",
+  "created": "2025-10-27",
+  "templateType": "enterprise",
+  "version": "2.0",
+  "state": {
+    "hasGreeted": false,
+    "setupComplete": false,
+    "currentSprint": null,
+    "phase": "planning"
+  },
+  "metadata": {
+    "tradeName": null,
+    "teamType": null,
+    "linearProjectId": "{{LINEAR_PROJECT_ID}}",
+    "linearProjectUrl": "{{LINEAR_PROJECT_URL}}"
+  },
+  "ports": {
+    "frontend": "3009",
+    "backend": "8009",
+    "postgres": "5409",
+    "redis": "6409",
+    "mongo": "27009"
+  }
+}
