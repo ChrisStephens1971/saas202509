@@ -8,11 +8,11 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, F, ExpressionWrapper, Cast, IntegerField, Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from decimal import Decimal
-from datetime import date
+from datetime import date, timedelta
 import csv
 import io
 
@@ -576,5 +576,408 @@ class BudgetLineViewSet(viewsets.ModelViewSet):
                 {'error': 'Cannot modify active or closed budgets'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         return super().create(request, *args, **kwargs)
+
+
+class DashboardViewSet(viewsets.ViewSet):
+    """
+    Dashboard API endpoints for financial metrics and summaries.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'])
+    def cash_position(self, request):
+        """
+        Get current cash balances across all funds with trend data.
+
+        Returns:
+            {
+                "total_cash": "85500.00",
+                "funds": [
+                    {
+                        "name": "Operating Fund",
+                        "balance": "45000.00",
+                        "trend": 5.2
+                    },
+                    ...
+                ]
+            }
+        """
+        tenant = get_tenant(request)
+
+        # Get all funds with their current balances
+        funds = Fund.objects.filter(tenant=tenant)
+        fund_data = []
+        total_cash = Decimal('0.00')
+
+        for fund in funds:
+            # Current balance
+            balance = fund.balance
+            total_cash += balance
+
+            # Calculate trend (compare to 30 days ago)
+            thirty_days_ago = timezone.now() - timedelta(days=30)
+            entries_last_month = JournalEntry.objects.filter(
+                fund=fund,
+                entry_date__gte=thirty_days_ago.date(),
+                entry_date__lte=timezone.now().date()
+            ).aggregate(
+                debits=Coalesce(Sum('debit_amount'), Decimal('0.00')),
+                credits=Coalesce(Sum('credit_amount'), Decimal('0.00'))
+            )
+
+            net_change = entries_last_month['debits'] - entries_last_month['credits']
+            previous_balance = balance - net_change
+
+            if previous_balance > 0:
+                trend = float((net_change / previous_balance) * 100)
+            else:
+                trend = 0.0
+
+            fund_data.append({
+                'name': fund.name,
+                'balance': str(balance),
+                'trend': round(trend, 2)
+            })
+
+        return Response({
+            'total_cash': str(total_cash),
+            'funds': fund_data
+        })
+
+    @action(detail=False, methods=['get'])
+    def ar_aging(self, request):
+        """
+        Get AR aging buckets.
+
+        Returns:
+            {
+                "total_ar": "12300.00",
+                "average_days": 45,
+                "buckets": {
+                    "current": {"amount": "7380.00", "percentage": 60, "count": 15},
+                    "days_30_60": {"amount": "3075.00", "percentage": 25, "count": 8},
+                    "days_60_90": {"amount": "1230.00", "percentage": 10, "count": 3},
+                    "days_over_90": {"amount": "615.00", "percentage": 5, "count": 2}
+                }
+            }
+        """
+        tenant = get_tenant(request)
+        today = timezone.now().date()
+
+        # Get all unpaid invoices
+        invoices = Invoice.objects.filter(
+            owner__tenant=tenant,
+            status__in=['sent', 'overdue']
+        )
+
+        total_ar = Decimal('0.00')
+        buckets = {
+            'current': {'amount': Decimal('0.00'), 'count': 0},
+            'days_30_60': {'amount': Decimal('0.00'), 'count': 0},
+            'days_60_90': {'amount': Decimal('0.00'), 'count': 0},
+            'days_over_90': {'amount': Decimal('0.00'), 'count': 0}
+        }
+
+        total_days = 0
+        invoice_count = 0
+
+        for invoice in invoices:
+            balance = invoice.balance_due
+            if balance <= 0:
+                continue
+
+            total_ar += balance
+            days_old = (today - invoice.due_date).days
+            total_days += days_old
+            invoice_count += 1
+
+            if days_old <= 30:
+                buckets['current']['amount'] += balance
+                buckets['current']['count'] += 1
+            elif days_old <= 60:
+                buckets['days_30_60']['amount'] += balance
+                buckets['days_30_60']['count'] += 1
+            elif days_old <= 90:
+                buckets['days_60_90']['amount'] += balance
+                buckets['days_60_90']['count'] += 1
+            else:
+                buckets['days_over_90']['amount'] += balance
+                buckets['days_over_90']['count'] += 1
+
+        # Calculate percentages
+        bucket_data = {}
+        for key, data in buckets.items():
+            percentage = int((data['amount'] / total_ar * 100)) if total_ar > 0 else 0
+            bucket_data[key] = {
+                'amount': str(data['amount']),
+                'percentage': percentage,
+                'count': data['count']
+            }
+
+        average_days = int(total_days / invoice_count) if invoice_count > 0 else 0
+
+        return Response({
+            'total_ar': str(total_ar),
+            'average_days': average_days,
+            'buckets': bucket_data
+        })
+
+    @action(detail=False, methods=['get'])
+    def expenses(self, request):
+        """
+        Get expense summary (MTD/YTD).
+
+        Query params:
+            period: 'mtd' or 'ytd'
+
+        Returns:
+            {
+                "period": "mtd",
+                "total": "18500.00",
+                "comparison": {
+                    "previous_period": "20100.00",
+                    "change_pct": -8.0
+                },
+                "top_categories": [...]
+            }
+        """
+        tenant = get_tenant(request)
+        period = request.query_params.get('period', 'mtd')
+        today = timezone.now().date()
+
+        if period == 'mtd':
+            start_date = today.replace(day=1)
+            previous_start = (start_date - timedelta(days=1)).replace(day=1)
+            previous_end = start_date - timedelta(days=1)
+        else:  # ytd
+            start_date = today.replace(month=1, day=1)
+            previous_start = start_date.replace(year=start_date.year - 1)
+            previous_end = start_date - timedelta(days=1)
+
+        # Get expense accounts (liabilities and expenses)
+        expense_entries = JournalEntry.objects.filter(
+            fund__tenant=tenant,
+            entry_date__gte=start_date,
+            entry_date__lte=today,
+            debit_amount__gt=0
+        ).aggregate(total=Coalesce(Sum('debit_amount'), Decimal('0.00')))
+
+        previous_entries = JournalEntry.objects.filter(
+            fund__tenant=tenant,
+            entry_date__gte=previous_start,
+            entry_date__lte=previous_end,
+            debit_amount__gt=0
+        ).aggregate(total=Coalesce(Sum('debit_amount'), Decimal('0.00')))
+
+        total = expense_entries['total']
+        previous_total = previous_entries['total']
+
+        if previous_total > 0:
+            change_pct = float((total - previous_total) / previous_total * 100)
+        else:
+            change_pct = 0.0
+
+        # Get top expense categories
+        top_categories = []
+        category_totals = JournalEntry.objects.filter(
+            fund__tenant=tenant,
+            entry_date__gte=start_date,
+            entry_date__lte=today,
+            debit_amount__gt=0
+        ).values('account__account_name').annotate(
+            amount=Sum('debit_amount')
+        ).order_by('-amount')[:3]
+
+        for cat in category_totals:
+            top_categories.append({
+                'category': cat['account__account_name'],
+                'amount': str(cat['amount'])
+            })
+
+        return Response({
+            'period': period,
+            'total': str(total),
+            'comparison': {
+                'previous_period': str(previous_total),
+                'change_pct': round(change_pct, 1)
+            },
+            'top_categories': top_categories
+        })
+
+    @action(detail=False, methods=['get'])
+    def revenue(self, request):
+        """
+        Get revenue summary (MTD/YTD).
+
+        Query params:
+            period: 'mtd' or 'ytd'
+
+        Returns:
+            {
+                "period": "mtd",
+                "total": "42000.00",
+                "comparison": {
+                    "previous_period": "41000.00",
+                    "change_pct": 2.4
+                }
+            }
+        """
+        tenant = get_tenant(request)
+        period = request.query_params.get('period', 'mtd')
+        today = timezone.now().date()
+
+        if period == 'mtd':
+            start_date = today.replace(day=1)
+            previous_start = (start_date - timedelta(days=1)).replace(day=1)
+            previous_end = start_date - timedelta(days=1)
+        else:  # ytd
+            start_date = today.replace(month=1, day=1)
+            previous_start = start_date.replace(year=start_date.year - 1)
+            previous_end = start_date - timedelta(days=1)
+
+        # Get revenue (credit entries to revenue accounts)
+        revenue_entries = JournalEntry.objects.filter(
+            fund__tenant=tenant,
+            entry_date__gte=start_date,
+            entry_date__lte=today,
+            credit_amount__gt=0
+        ).aggregate(total=Coalesce(Sum('credit_amount'), Decimal('0.00')))
+
+        previous_entries = JournalEntry.objects.filter(
+            fund__tenant=tenant,
+            entry_date__gte=previous_start,
+            entry_date__lte=previous_end,
+            credit_amount__gt=0
+        ).aggregate(total=Coalesce(Sum('credit_amount'), Decimal('0.00')))
+
+        total = revenue_entries['total']
+        previous_total = previous_entries['total']
+
+        if previous_total > 0:
+            change_pct = float((total - previous_total) / previous_total * 100)
+        else:
+            change_pct = 0.0
+
+        return Response({
+            'period': period,
+            'total': str(total),
+            'comparison': {
+                'previous_period': str(previous_total),
+                'change_pct': round(change_pct, 1)
+            }
+        })
+
+    @action(detail=False, methods=['get'])
+    def revenue_vs_expenses(self, request):
+        """
+        Get monthly revenue vs expenses for charting (last 12 months).
+
+        Returns:
+            {
+                "months": [
+                    {"month": "2024-11", "revenue": "42000.00", "expenses": "18500.00"},
+                    {"month": "2024-12", "revenue": "42000.00", "expenses": "19200.00"},
+                    ...
+                ]
+            }
+        """
+        tenant = get_tenant(request)
+        today = timezone.now().date()
+        twelve_months_ago = today - timedelta(days=365)
+
+        months_data = []
+        current_date = twelve_months_ago.replace(day=1)
+
+        while current_date <= today:
+            # Last day of month
+            if current_date.month == 12:
+                next_month = current_date.replace(year=current_date.year + 1, month=1, day=1)
+            else:
+                next_month = current_date.replace(month=current_date.month + 1, day=1)
+            end_date = next_month - timedelta(days=1)
+
+            # Revenue (credits)
+            revenue = JournalEntry.objects.filter(
+                fund__tenant=tenant,
+                entry_date__gte=current_date,
+                entry_date__lte=end_date,
+                credit_amount__gt=0
+            ).aggregate(total=Coalesce(Sum('credit_amount'), Decimal('0.00')))['total']
+
+            # Expenses (debits)
+            expenses = JournalEntry.objects.filter(
+                fund__tenant=tenant,
+                entry_date__gte=current_date,
+                entry_date__lte=end_date,
+                debit_amount__gt=0
+            ).aggregate(total=Coalesce(Sum('debit_amount'), Decimal('0.00')))['total']
+
+            months_data.append({
+                'month': current_date.strftime('%Y-%m'),
+                'revenue': str(revenue),
+                'expenses': str(expenses)
+            })
+
+            current_date = next_month
+
+        return Response({
+            'months': months_data
+        })
+
+    @action(detail=False, methods=['get'])
+    def recent_activity(self, request):
+        """
+        Get recent activity log (last 20 events).
+
+        Returns:
+            {
+                "activities": [
+                    {
+                        "type": "invoice",
+                        "description": "Invoice #1025 created",
+                        "amount": "450.00",
+                        "timestamp": "2025-10-28T10:30:00Z"
+                    },
+                    ...
+                ]
+            }
+        """
+        tenant = get_tenant(request)
+        limit = int(request.query_params.get('limit', 20))
+
+        activities = []
+
+        # Get recent invoices
+        recent_invoices = Invoice.objects.filter(
+            owner__tenant=tenant
+        ).order_by('-issue_date')[:limit//2]
+
+        for invoice in recent_invoices:
+            activities.append({
+                'type': 'invoice',
+                'description': f'Invoice #{invoice.invoice_number} created',
+                'amount': str(invoice.total_amount),
+                'timestamp': invoice.issue_date.isoformat()
+            })
+
+        # Get recent payments
+        recent_payments = Payment.objects.filter(
+            owner__tenant=tenant
+        ).order_by('-payment_date')[:limit//2]
+
+        for payment in recent_payments:
+            activities.append({
+                'type': 'payment',
+                'description': f'Payment received from {payment.owner.unit.unit_number}',
+                'amount': str(payment.amount),
+                'timestamp': payment.payment_date.isoformat()
+            })
+
+        # Sort by timestamp descending
+        activities.sort(key=lambda x: x['timestamp'], reverse=True)
+
+        return Response({
+            'activities': activities[:limit]
+        })
