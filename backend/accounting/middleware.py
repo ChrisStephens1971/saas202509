@@ -121,7 +121,7 @@ class TenantContextMiddleware(MiddlewareMixin):
         """Add tenant to request object"""
         tenant_id = request.GET.get('tenant')
 
-        if not tenant_id and hasattr(request, 'resolver_match'):
+        if not tenant_id and hasattr(request, 'resolver_match') and request.resolver_match:
             tenant_id = request.resolver_match.kwargs.get('tenant_id')
 
         if tenant_id:

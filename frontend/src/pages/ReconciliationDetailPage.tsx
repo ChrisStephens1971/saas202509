@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { Layout } from '../components/layout/Layout'
 import { reconciliationApi } from '../api/reconciliation'
 import type { BankStatement, BankTransaction, MatchSuggestion } from '../types/api'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
 import { Skeleton } from '../components/ui/Skeleton'
 import { formatCurrency, formatDate } from '../utils/formatters'
-import { ArrowLeft, CheckCircle2, XCircle, AlertCircle, Sparkles } from 'lucide-react'
+import { ArrowLeft, XCircle, Sparkles } from 'lucide-react'
 
 export const ReconciliationDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>()
@@ -116,61 +117,65 @@ export const ReconciliationDetailPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
-        <Skeleton className="h-12 w-64 mb-6" />
-        <Skeleton className="h-96" />
-      </div>
+      <Layout>
+        <div className="max-w-7xl mx-auto">
+          <Skeleton className="h-12 w-64 mb-6" />
+          <Skeleton className="h-96" />
+        </div>
+      </Layout>
     )
   }
 
   if (error || !statement) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
-        <Button variant="outline" onClick={() => navigate('/reconciliation')} className="mb-4">
-          <ArrowLeft size={16} className="mr-2" />
-          Back to Statements
-        </Button>
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-          {error || 'Statement not found'}
+      <Layout>
+        <div className="max-w-7xl mx-auto">
+          <Button variant="outline" onClick={() => navigate('/reconciliation')} className="mb-4">
+            <ArrowLeft size={16} className="mr-2" />
+            Back to Statements
+          </Button>
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+            {error || 'Statement not found'}
+          </div>
         </div>
-      </div>
+      </Layout>
     )
   }
 
   const matchedCount = transactions.filter((t) => t.status === 'matched' || t.status === 'created').length
   const unmatchedCount = transactions.filter((t) => t.status === 'unmatched').length
-  const ignoredCount = transactions.filter((t) => t.status === 'ignored').length
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <Button variant="outline" onClick={() => navigate('/reconciliation')} className="mb-4">
-        <ArrowLeft size={16} className="mr-2" />
-        Back to Statements
-      </Button>
+    <Layout>
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <Button variant="outline" onClick={() => navigate('/reconciliation')} className="mb-4">
+          <ArrowLeft size={16} className="mr-2" />
+          Back to Statements
+        </Button>
 
-      <div className="mb-6 bg-white border border-gray-200 rounded-lg p-6">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              Bank Statement - {formatDate(statement.statement_date)}
-            </h1>
-            <p className="text-gray-600 mt-1">
-              {statement.fund_name} • Uploaded {formatDate(statement.uploaded_at)}
-            </p>
+        <div className="mb-6 bg-white border border-gray-200 rounded-lg p-6">
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                Bank Statement - {formatDate(statement.statement_date)}
+              </h1>
+              <p className="text-gray-600 mt-1">
+                {statement.fund_name} • Uploaded {formatDate(statement.uploaded_at)}
+              </p>
+            </div>
+            <div className="text-right">
+              {statement.reconciled ? (
+                <Badge variant="success" className="text-base px-4 py-2">
+                  Reconciled
+                </Badge>
+              ) : (
+                <Badge variant="warning" className="text-base px-4 py-2">
+                  In Progress
+                </Badge>
+              )}
+            </div>
           </div>
-          <div className="text-right">
-            {statement.reconciled ? (
-              <Badge variant="success" className="text-base px-4 py-2">
-                Reconciled
-              </Badge>
-            ) : (
-              <Badge variant="warning" className="text-base px-4 py-2">
-                In Progress
-              </Badge>
-            )}
-          </div>
-        </div>
 
         <div className="grid grid-cols-4 gap-6 mt-6">
           <div>
@@ -334,5 +339,7 @@ export const ReconciliationDetailPage: React.FC = () => {
         </div>
       </div>
     </div>
+    </Layout>
   )
 }
+ 

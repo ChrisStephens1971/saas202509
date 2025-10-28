@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Layout } from '../components/layout/Layout'
 import { budgetsApi } from '../api/budgets'
 import type { Budget, Fund } from '../types/api'
 import { Button } from '../components/ui/Button'
@@ -125,7 +126,7 @@ export const BudgetsPage: React.FC = () => {
   ]
 
   return (
-    <div className="p-6">
+    <Layout>
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <div>
@@ -281,6 +282,6 @@ export const BudgetsPage: React.FC = () => {
           ))}
         </div>
       )}
-    </div>
+    </Layout>
   )
 }

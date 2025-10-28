@@ -13,6 +13,7 @@ import { Download } from 'lucide-react'
 export function InvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('ALL')
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -24,12 +25,15 @@ export function InvoicesPage() {
   const loadInvoices = async () => {
     try {
       setLoading(true)
+      setError(null)
       const data = await accountingApi.getInvoices({
         status: filter === 'ALL' ? undefined : filter
       })
-      setInvoices(data.results)
-    } catch (err) {
-      console.error(err)
+      setInvoices(data.results || [])
+    } catch (err: any) {
+      console.error('Failed to load invoices:', err)
+      setError(err.message || 'Failed to load invoices')
+      setInvoices([])
     } finally {
       setLoading(false)
     }
@@ -49,8 +53,8 @@ export function InvoicesPage() {
     // Flatten invoice data for CSV export
     const flattenedData = invoices.map(invoice => ({
       invoice_number: invoice.invoice_number,
-      owner_name: `${invoice.owner.first_name} ${invoice.owner.last_name}`,
-      owner_email: invoice.owner.email,
+      owner_name: invoice.owner ? `${invoice.owner.first_name} ${invoice.owner.last_name}` : 'N/A',
+      owner_email: invoice.owner?.email || 'N/A',
       invoice_date: formatDate(invoice.invoice_date),
       due_date: formatDate(invoice.due_date),
       total_amount: invoice.total_amount,
@@ -98,6 +102,11 @@ export function InvoicesPage() {
         </div>
 
         <Card>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+              {error}
+            </div>
+          )}
           {loading ? (
             <SkeletonTable rows={10} />
           ) : (
@@ -121,8 +130,10 @@ export function InvoicesPage() {
                       className="hover:bg-gray-50 cursor-pointer transition-colors"
                       onClick={() => handleInvoiceClick(invoice.id)}
                     >
-                      <td className="px-4 py-3 text-sm font-medium text-primary-600">{invoice.invoice_number}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{invoice.owner.first_name} {invoice.owner.last_name}</td>
+                      <td className="px-4 py-3 text-sm font-medium text-blue-600">{invoice.invoice_number}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">
+                        {invoice.owner ? `${invoice.owner.first_name} ${invoice.owner.last_name}` : 'N/A'}
+                      </td>
                       <td className="px-4 py-3 text-sm text-gray-700">{formatDate(invoice.invoice_date)}</td>
                       <td className="px-4 py-3 text-sm text-gray-700">{formatDate(invoice.due_date)}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{formatMoney(invoice.total_amount)}</td>

@@ -533,8 +533,20 @@ class BudgetViewSet(viewsets.ModelViewSet):
         
         budget.status = Budget.STATUS_ACTIVE
         budget.save()
-        
+
         serializer = self.get_serializer(budget)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='funds')
+    def funds(self, request):
+        """
+        List all funds for the current tenant.
+
+        Used by the UI to populate fund dropdowns.
+        """
+        tenant = get_tenant(request)
+        queryset = Fund.objects.filter(tenant=tenant, is_active=True)
+        serializer = FundSerializer(queryset, many=True)
         return Response(serializer.data)
 
 
@@ -1446,3 +1458,23 @@ class BankReconciliationViewSet(viewsets.ViewSet):
 
         serializer = ReconciliationReportSerializer(report)
         return Response(serializer.data)
+
+
+class FundViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing Funds.
+    """
+    serializer_class = FundSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['fund_type', 'is_active']
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'fund_type', 'created_at']
+    ordering = ['fund_type', 'name']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return Fund.objects.filter(tenant=tenant)
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(tenant=tenant)

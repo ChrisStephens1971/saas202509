@@ -70,7 +70,7 @@ export const budgetsApi = {
 
   // Helper endpoints
   getFunds: async (): Promise<Fund[]> => {
-    const response = await client.get<PaginatedResponse<Fund>>('/api/v1/accounting/funds/')
+    const response = await client.get<PaginatedResponse<Fund>>('/api/v1/accounting/budgets/funds/')
     return response.data.results
   },
 

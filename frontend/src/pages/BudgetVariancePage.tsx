@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { Layout } from '../components/layout/Layout'
 import { budgetsApi } from '../api/budgets'
 import type { Budget, BudgetVarianceReport } from '../types/api'
 import { Button } from '../components/ui/Button'
@@ -62,29 +63,29 @@ export const BudgetVariancePage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="p-6">
+      <Layout>
         <Skeleton className="h-8 w-64 mb-4" />
         <Skeleton className="h-64 w-full mb-4" />
         <Skeleton className="h-96 w-full" />
-      </div>
+      </Layout>
     )
   }
 
   if (error || !budget || !report) {
     return (
-      <div className="p-6">
+      <Layout>
         <div className="rounded-md bg-red-50 p-4">
           <p className="text-sm text-red-800">{error || 'Failed to load report'}</p>
         </div>
         <Button onClick={() => navigate('/budgets')} className="mt-4">
           Back to Budgets
         </Button>
-      </div>
+      </Layout>
     )
   }
 
   return (
-    <div className="p-6">
+    <Layout>
       {/* Header */}
       <div className="mb-6">
         <Button
@@ -252,6 +253,6 @@ export const BudgetVariancePage: React.FC = () => {
           <span className="text-gray-600">Unfavorable - Over budget</span>
         </div>
       </div>
-    </div>
+    </Layout>
   )
 }

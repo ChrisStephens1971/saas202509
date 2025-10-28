@@ -11,6 +11,7 @@ import { BudgetCreatePage } from './pages/BudgetCreatePage'
 import { BudgetVariancePage } from './pages/BudgetVariancePage'
 import { BankReconciliationPage } from './pages/BankReconciliationPage'
 import { ReconciliationDetailPage } from './pages/ReconciliationDetailPage'
+import { FundsPage } from './pages/FundsPage'
 
 function App() {
   return (
@@ -96,6 +97,15 @@ function App() {
             element={
               <ProtectedRoute>
                 <ReconciliationDetailPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/funds"
+            element={
+              <ProtectedRoute>
+                <FundsPage />
               </ProtectedRoute>
             }
           />

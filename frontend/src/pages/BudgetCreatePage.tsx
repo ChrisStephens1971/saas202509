@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Layout } from '../components/layout/Layout'
 import { budgetsApi } from '../api/budgets'
 import type { CreateBudgetRequest } from '../types/api'
 import { BudgetDetailsForm } from '../components/budgets/BudgetDetailsForm'
@@ -94,7 +95,8 @@ export const BudgetCreatePage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
+    <Layout>
+      <div className="max-w-4xl mx-auto">
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Create Budget</h1>
@@ -163,5 +165,6 @@ export const BudgetCreatePage: React.FC = () => {
         )}
       </div>
     </div>
+    </Layout>
   )
 }

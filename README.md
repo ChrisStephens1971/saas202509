@@ -5,7 +5,7 @@ A comprehensive multi-tenant fund accounting system designed for Homeowners Asso
 **Project ID:** saas202509
 **Created:** 2025-10-27
 **Status:** Development Phase
-**Sprints Completed:** 12 of ~15-20 planned
+**Sprints Completed:** 13 of ~15-20 planned
 
 ---
 
@@ -238,14 +238,53 @@ npm run build
 
 **Status:** ✅ **PRODUCTION READY** - Tested, documented, and ready to deploy
 
+### Sprint 13: Funds Management UI + Navigation Overhaul (Completed 2025-10-28)
+**Goal:** Complete frontend CRUD interface for fund management and improve navigation UX
+
+**Delivered:**
+- **Sidebar Navigation:** Converted horizontal top nav to fixed vertical left sidebar
+  - 256px fixed width with proper spacing
+  - Icons for all navigation items (lucide-react)
+  - Logout button positioned at bottom
+  - Hover effects and active states
+
+- **Funds Management Feature:**
+  - **Backend:** FundViewSet with full CRUD operations
+    - Tenant-scoped queries with filtering (type, active status)
+    - Search by name and description
+    - API endpoint: `/api/v1/accounting/funds/`
+
+  - **Frontend:** Complete UI (3 new files, 513 lines)
+    - FundsPage with card-based list view
+    - Filter dropdowns (fund type, status)
+    - FundModal for create/edit operations
+    - Color-coded badges (Operating=green, Reserve=blue, Special Assessment=yellow)
+    - Empty state, loading skeletons, error handling
+
+  - **Routing & Navigation:**
+    - Added `/funds` route with ProtectedRoute wrapper
+    - Added "Funds" link to sidebar (with Building2 icon)
+
+- **Bug Fixes:** 6 TypeScript compilation errors resolved
+  - Updated Fund type with missing fields (description, is_active, created_at)
+  - Added missing JournalEntry interface
+  - Fixed apiClient import (default vs named export)
+  - Added 'secondary' variant to Badge component
+  - Removed unused imports and variables
+  - Fixed Fund object rendering in BankReconciliationPage
+
+**Files:** 9 files changed, 513 insertions, 20 deletions
+
+**Documentation:** Session notes in `docs/session-notes/2025-10-28-funds-feature.md`
+
 ---
 
 ## 🎯 Roadmap
 
-### Upcoming Sprints (13-15)
-- **Sprint 13:** Reserve Planning Module (5-20 year forecasting)
-- **Sprint 14:** Advanced Reporting (custom report builder)
-- **Sprint 15:** Email Notification Preferences UI
+### Upcoming Sprints (14-16)
+- **Sprint 14:** Reserve Planning Module (5-20 year forecasting)
+- **Sprint 15:** Advanced Reporting (custom report builder)
+- **Sprint 16:** Email Notification Preferences UI
 
 ### Future Features
 - Mobile app (React Native)

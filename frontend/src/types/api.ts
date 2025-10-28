@@ -122,8 +122,12 @@ export interface LedgerEntry {
 export interface Fund {
   id: string
   name: string
-  fund_type: 'operating' | 'reserve' | 'special_assessment'
-  current_balance: string
+  fund_type: 'OPERATING' | 'RESERVE' | 'SPECIAL_ASSESSMENT'
+  description?: string
+  is_active: boolean
+  current_balance?: string
+  created_at: string
+  updated_at?: string
 }
 
 export interface Account {
@@ -240,6 +244,16 @@ export interface BankTransaction {
   matched_entry_description?: string | null
   match_confidence: number
   notes: string
+}
+
+export interface JournalEntry {
+  id: string
+  entry_number: string
+  entry_date: string
+  description: string
+  amount: string
+  account?: Account
+  reference_number?: string
 }
 
 export interface MatchSuggestion {

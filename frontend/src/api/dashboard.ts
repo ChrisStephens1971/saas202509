@@ -76,7 +76,7 @@ export const dashboardApi = {
    */
   getCashPosition: async (): Promise<CashPositionResponse> => {
     const response = await client.get<CashPositionResponse>(
-      '/api/v1/accounting/dashboard/cash-position/'
+      '/api/v1/accounting/dashboard/cash_position/'
     )
     return response.data
   },
@@ -86,7 +86,7 @@ export const dashboardApi = {
    */
   getARAging: async (): Promise<ARAgingResponse> => {
     const response = await client.get<ARAgingResponse>(
-      '/api/v1/accounting/dashboard/ar-aging/'
+      '/api/v1/accounting/dashboard/ar_aging/'
     )
     return response.data
   },
@@ -118,7 +118,7 @@ export const dashboardApi = {
    */
   getRevenueVsExpenses: async (): Promise<RevenueVsExpensesResponse> => {
     const response = await client.get<RevenueVsExpensesResponse>(
-      '/api/v1/accounting/dashboard/revenue-vs-expenses/'
+      '/api/v1/accounting/dashboard/revenue_vs_expenses/'
     )
     return response.data
   },
@@ -128,7 +128,7 @@ export const dashboardApi = {
    */
   getRecentActivity: async (limit: number = 20): Promise<RecentActivityResponse> => {
     const response = await client.get<RecentActivityResponse>(
-      '/api/v1/accounting/dashboard/recent-activity/',
+      '/api/v1/accounting/dashboard/recent_activity/',
       { params: { limit } }
     )
     return response.data
