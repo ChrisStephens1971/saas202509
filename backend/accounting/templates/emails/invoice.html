@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice {{ invoice.invoice_number }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #2c3e50; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .invoice-details { margin: 20px 0; }
+        .invoice-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        .invoice-table th, .invoice-table td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        .invoice-table th { background-color: #34495e; color: white; }
+        .total { font-size: 1.2em; font-weight: bold; text-align: right; margin-top: 20px; }
+        .footer { text-align: center; padding: 20px; color: #7f8c8d; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ tenant.name }}</h1>
+            <p>Invoice</p>
+        </div>
+
+        <div class="content">
+            <p>Dear {{ owner.first_name }} {{ owner.last_name }},</p>
+
+            <p>Please find your invoice for {{ tenant.name }}.</p>
+
+            <div class="invoice-details">
+                <p><strong>Invoice Number:</strong> {{ invoice.invoice_number }}</p>
+                <p><strong>Invoice Date:</strong> {{ invoice.invoice_date }}</p>
+                <p><strong>Due Date:</strong> {{ invoice.due_date }}</p>
+            </div>
+
+            <table class="invoice-table">
+                <thead>
+                    <tr>
+                        <th>Description</th>
+                        <th style="text-align: right;">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for line in line_items %}
+                    <tr>
+                        <td>{{ line.description }}</td>
+                        <td style="text-align: right;">${{ line.amount }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <div class="total">
+                Total Amount: ${{ total_amount }}
+            </div>
+
+            <p>Please remit payment by <strong>{{ invoice.due_date }}</strong>.</p>
+
+            <p>If you have any questions, please contact us.</p>
+
+            <p>Thank you,<br>{{ tenant.name }} Management</p>
+        </div>
+
+        <div class="footer">
+            <p>This is an automated email. Please do not reply.</p>
+        </div>
+    </div>
+</body>
+</html>

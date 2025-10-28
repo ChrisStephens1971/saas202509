@@ -1,0 +1,22 @@
+{{ tenant.name }}
+Payment Receipt
+
+Dear {{ owner.first_name }} {{ owner.last_name }},
+
+Thank you for your payment. This confirms we have received your payment.
+
+Payment Number: {{ payment.payment_number }}
+Payment Date: {{ payment.payment_date }}
+Amount Received: ${{ total_amount }}
+Payment Method: {{ payment.get_payment_method_display }}
+
+Applied to the following invoices:
+{% for application in applications %}
+- Invoice {{ application.invoice.invoice_number }}: ${{ application.amount_applied }}
+{% endfor %}
+
+Your current account balance has been updated.
+
+Thank you for your payment.
+
+{{ tenant.name }} Management

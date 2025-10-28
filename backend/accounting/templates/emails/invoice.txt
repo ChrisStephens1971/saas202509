@@ -1,0 +1,23 @@
+{{ tenant.name }}
+Invoice
+
+Dear {{ owner.first_name }} {{ owner.last_name }},
+
+Please find your invoice for {{ tenant.name }}.
+
+Invoice Number: {{ invoice.invoice_number }}
+Invoice Date: {{ invoice.invoice_date }}
+Due Date: {{ invoice.due_date }}
+
+{% for line in line_items %}
+{{ line.description }}: ${{ line.amount }}
+{% endfor %}
+
+Total Amount: ${{ total_amount }}
+
+Please remit payment by {{ invoice.due_date }}.
+
+If you have any questions, please contact us.
+
+Thank you,
+{{ tenant.name }} Management

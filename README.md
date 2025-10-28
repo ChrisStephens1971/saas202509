@@ -1,34 +1,21 @@
-# Multi-Tenant HOA Accounting System
+# Planning Template Repository
 
-**Project ID:** saas202509
-**Trade Name:** Accounting (TBD)
-**Created:** 2025-10-27
-**Template:** Enterprise (with compliance)
-
-A fund-based accounting system for Homeowners Associations with multi-tenant architecture and zero tolerance for financial errors.
+A comprehensive planning and documentation template for SaaS projects, especially designed for solo founders and small teams. This repository provides structure, templates, and best practices for every stage of product planning and development.
 
 ---
 
 ## 🎯 What This Is
 
-This project builds a **multi-tenant fund accounting system for HOAs** that solves:
+This is a **ready-to-use folder structure and template library** for planning and building SaaS products. It includes:
 
-- **Fund Accounting** - Separate operating, reserve, and special assessment funds
-- **Bank Reconciliation** - Auto-match 90%+ of transactions via Plaid integration
-- **AR/Collections** - Automated delinquency workflow with certified notice tracking
-- **Audit Trail** - Immutable, event-sourced ledger for point-in-time reconstruction
+- **Product planning templates** (PRDs, roadmaps, feature specs)
+- **Sprint planning workflows** (user stories, retrospectives)
+- **Technical documentation** (architecture decisions, tech specs, API docs)
+- **Business planning** (OKRs, metrics, goals)
+- **Meeting templates** (customer interviews, brainstorms)
+- **Process documentation** (runbooks, workflows, SOPs)
 
-**Architecture:** Schema-per-tenant PostgreSQL, event sourcing, optimistic locking
-**Timeline:** 7-10 months to MVP + 6-12 months of bug fixes and edge cases
-
-## 🚀 Get Started
-
-See **ACCOUNTING-PROJECT-QUICKSTART.md** for orientation and Week 1 checklist.
-
-**Essential Reading:**
-1. `ACCOUNTING-PROJECT-QUICKSTART.md` - 10 minute overview
-2. `product/HOA-PAIN-POINTS-AND-REQUIREMENTS.md` - Product requirements (30 min)
-3. `technical/architecture/MULTI-TENANT-ACCOUNTING-ARCHITECTURE.md` - Technical architecture (2 hours)
+**Perfect for:** Solo founders, small teams, and anyone who wants organized, professional planning without starting from scratch.
 
 ---
 
@@ -77,6 +64,11 @@ See **ACCOUNTING-PROJECT-QUICKSTART.md** for orientation and Week 1 checklist.
 │   ├── operations/      # Operational runbooks
 │   ├── business/        # Business processes
 │   └── examples/        # Example: Deployment workflow
+│
+├── scripts/             # Utility scripts
+│   ├── install-pandoc.ps1  # Install Pandoc for document conversion
+│   ├── convert-to-docx.bat # Convert markdown to Word documents
+│   └── README.md        # Scripts documentation
 │
 ├── .github/             # GitHub templates
 │   ├── ISSUE_TEMPLATE/  # Feature, bug, task templates

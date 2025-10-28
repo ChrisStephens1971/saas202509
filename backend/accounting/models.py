@@ -1,0 +1,2283 @@
+"""
+Accounting models for multi-tenant HOA fund accounting system.
+
+CRITICAL ACCOUNTING PRINCIPLES:
+1. All money fields use NUMERIC(15,2) - NEVER use FloatField
+2. Accounting dates use DATE - NEVER use DateTimeField for transaction dates
+3. Financial records are IMMUTABLE - Never UPDATE or DELETE (event sourcing)
+4. Every journal entry MUST balance (debits = credits)
+5. Each tenant has separate fund structure (operating, reserve, special assessment)
+"""
+
+from decimal import Decimal
+from datetime import date
+from django.db import models, transaction
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
+from django.utils import timezone
+from django.conf import settings
+import uuid
+
+
+class Fund(models.Model):
+    """
+    Represents a fund within an HOA (Operating, Reserve, Special Assessment).
+
+    Each fund has its own balance sheet. Funds cannot be mixed without board approval.
+    """
+
+    # Fund types
+    TYPE_OPERATING = 'OPERATING'
+    TYPE_RESERVE = 'RESERVE'
+    TYPE_SPECIAL_ASSESSMENT = 'SPECIAL_ASSESSMENT'
+
+    TYPE_CHOICES = [
+        (TYPE_OPERATING, 'Operating Fund'),
+        (TYPE_RESERVE, 'Reserve Fund'),
+        (TYPE_SPECIAL_ASSESSMENT, 'Special Assessment Fund'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,  # Never allow deletion of tenant with funds
+        related_name='funds',
+        help_text="The HOA (tenant) this fund belongs to"
+    )
+
+    name = models.CharField(
+        max_length=100,
+        help_text="Fund name (e.g., 'Operating Fund', 'Reserve Fund')"
+    )
+
+    fund_type = models.CharField(
+        max_length=30,
+        choices=TYPE_CHOICES,
+        help_text="Type of fund"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Description of fund purpose"
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this fund is currently active"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'funds'
+        ordering = ['fund_type', 'name']
+        unique_together = [['tenant', 'fund_type']]  # One operating, one reserve, etc per tenant
+        indexes = [
+            models.Index(fields=['tenant', 'fund_type']),
+            models.Index(fields=['tenant', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.tenant.name})"
+
+
+class AccountType(models.Model):
+    """
+    Account types for chart of accounts (Asset, Liability, Equity, Revenue, Expense).
+
+    Each type has a normal balance (debit or credit) which determines how increases/decreases work.
+    """
+
+    # Account type codes
+    CODE_ASSET = 'ASSET'
+    CODE_LIABILITY = 'LIABILITY'
+    CODE_EQUITY = 'EQUITY'
+    CODE_REVENUE = 'REVENUE'
+    CODE_EXPENSE = 'EXPENSE'
+
+    CODE_CHOICES = [
+        (CODE_ASSET, 'Asset'),
+        (CODE_LIABILITY, 'Liability'),
+        (CODE_EQUITY, 'Equity'),
+        (CODE_REVENUE, 'Revenue'),
+        (CODE_EXPENSE, 'Expense'),
+    ]
+
+    # Normal balance (how increases are recorded)
+    BALANCE_DEBIT = 'DEBIT'
+    BALANCE_CREDIT = 'CREDIT'
+
+    BALANCE_CHOICES = [
+        (BALANCE_DEBIT, 'Debit'),
+        (BALANCE_CREDIT, 'Credit'),
+    ]
+
+    code = models.CharField(
+        max_length=20,
+        primary_key=True,
+        choices=CODE_CHOICES,
+        help_text="Account type code"
+    )
+
+    name = models.CharField(
+        max_length=100,
+        help_text="Account type name"
+    )
+
+    normal_balance = models.CharField(
+        max_length=10,
+        choices=BALANCE_CHOICES,
+        help_text="Normal balance (Debit or Credit)"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Description of this account type"
+    )
+
+    class Meta:
+        db_table = 'account_types'
+        ordering = ['code']
+
+    def __str__(self):
+        return f"{self.name} ({self.normal_balance})"
+
+
+class Account(models.Model):
+    """
+    Individual account in the chart of accounts.
+
+    Accounts are organized by fund and account type. Supports hierarchical accounts (parent/child).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='accounts',
+        help_text="The HOA (tenant) this account belongs to"
+    )
+
+    fund = models.ForeignKey(
+        Fund,
+        on_delete=models.PROTECT,
+        related_name='accounts',
+        help_text="The fund this account belongs to"
+    )
+
+    account_type = models.ForeignKey(
+        AccountType,
+        on_delete=models.PROTECT,
+        related_name='accounts',
+        help_text="Type of account (Asset, Liability, etc.)"
+    )
+
+    account_number = models.CharField(
+        max_length=20,
+        help_text="Account number (e.g., '1100', '5200')"
+    )
+
+    name = models.CharField(
+        max_length=200,
+        help_text="Account name (e.g., 'Operating Cash', 'Landscaping Expense')"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Description of this account"
+    )
+
+    parent_account = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='sub_accounts',
+        help_text="Parent account for hierarchical accounts"
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this account is currently active"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'accounts'
+        ordering = ['account_number']
+        unique_together = [['tenant', 'fund', 'account_number']]
+        indexes = [
+            models.Index(fields=['tenant', 'fund']),
+            models.Index(fields=['tenant', 'account_type']),
+            models.Index(fields=['account_number']),
+        ]
+
+    def __str__(self):
+        return f"{self.account_number} - {self.name}"
+
+    def clean(self):
+        """Validate account belongs to same tenant as fund"""
+        if self.fund and self.fund.tenant_id != self.tenant_id:
+            raise ValidationError("Account fund must belong to the same tenant")
+
+    def get_balance(self):
+        """
+        Calculate current balance for this account.
+
+        Returns Decimal (positive for normal balance, negative for opposite).
+        """
+        from django.db.models import Sum, Q
+
+        # Sum all debits and credits for this account
+        lines = JournalEntryLine.objects.filter(account=self)
+        debits = lines.aggregate(total=Sum('debit_amount'))['total'] or Decimal('0.00')
+        credits = lines.aggregate(total=Sum('credit_amount'))['total'] or Decimal('0.00')
+
+        # Calculate balance based on normal balance
+        if self.account_type.normal_balance == AccountType.BALANCE_DEBIT:
+            return debits - credits
+        else:
+            return credits - debits
+
+
+class JournalEntry(models.Model):
+    """
+    Journal entry header (immutable).
+
+    Each journal entry contains multiple lines (debits and credits) that must balance.
+    Once posted, journal entries CANNOT be modified or deleted (event sourcing).
+    """
+
+    # Entry types
+    TYPE_MANUAL = 'MANUAL'
+    TYPE_INVOICE = 'INVOICE'
+    TYPE_PAYMENT = 'PAYMENT'
+    TYPE_ADJUSTMENT = 'ADJUSTMENT'
+    TYPE_REVERSAL = 'REVERSAL'
+    TYPE_TRANSFER = 'TRANSFER'
+
+    TYPE_CHOICES = [
+        (TYPE_MANUAL, 'Manual Entry'),
+        (TYPE_INVOICE, 'Invoice'),
+        (TYPE_PAYMENT, 'Payment'),
+        (TYPE_ADJUSTMENT, 'Adjustment'),
+        (TYPE_REVERSAL, 'Reversal'),
+        (TYPE_TRANSFER, 'Inter-fund Transfer'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='journal_entries',
+        help_text="The HOA (tenant) this entry belongs to"
+    )
+
+    entry_number = models.BigIntegerField(
+        help_text="Sequential entry number (auto-generated per tenant)"
+    )
+
+    entry_date = models.DateField(
+        help_text="Accounting date (DATE not TIMESTAMPTZ - critical for accounting)"
+    )
+
+    description = models.TextField(
+        help_text="Description of this journal entry"
+    )
+
+    entry_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default=TYPE_MANUAL,
+        help_text="Type of journal entry"
+    )
+
+    reference_id = models.UUIDField(
+        null=True,
+        blank=True,
+        help_text="Reference to source document (invoice, payment, etc.)"
+    )
+
+    # Immutability and audit trail
+    posted_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this entry was posted (UTC timestamp)"
+    )
+
+    posted_by = models.UUIDField(
+        null=True,
+        blank=True,
+        help_text="User ID who posted this entry"
+    )
+
+    reversed_by = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='reverses',
+        help_text="Reversal entry (if this entry was reversed)"
+    )
+
+    # Optional: Cryptographic hash chain for tamper detection
+    previous_entry_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Hash of previous entry (cryptographic chain)"
+    )
+
+    entry_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Hash of this entry for tamper detection"
+    )
+
+    class Meta:
+        db_table = 'journal_entries'
+        ordering = ['-entry_date', '-entry_number']
+        unique_together = [['tenant', 'entry_number']]
+        indexes = [
+            models.Index(fields=['tenant', 'entry_date']),
+            models.Index(fields=['tenant', 'entry_number']),
+            models.Index(fields=['entry_type']),
+            models.Index(fields=['reference_id']),
+        ]
+
+    def __str__(self):
+        return f"JE-{self.entry_number} ({self.entry_date})"
+
+    def clean(self):
+        """Validate journal entry balances (debits = credits)"""
+        if self.pk:  # Only validate if entry has lines
+            total_debits, total_credits = self.get_totals()
+            if total_debits != total_credits:
+                raise ValidationError(
+                    f"Journal entry does not balance: "
+                    f"Debits ${total_debits} != Credits ${total_credits}"
+                )
+
+    def get_totals(self):
+        """Calculate total debits and credits for this entry"""
+        lines = self.lines.all()
+        total_debits = sum(line.debit_amount for line in lines)
+        total_credits = sum(line.credit_amount for line in lines)
+        return (Decimal(str(total_debits)), Decimal(str(total_credits)))
+
+    def is_balanced(self):
+        """Check if this journal entry balances"""
+        total_debits, total_credits = self.get_totals()
+        return total_debits == total_credits
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        """
+        Override save to auto-generate entry_number.
+
+        Entry numbers are sequential per tenant.
+        """
+        if not self.entry_number:
+            # Get the last entry number for this tenant
+            last_entry = (
+                JournalEntry.objects
+                .filter(tenant=self.tenant)
+                .order_by('-entry_number')
+                .first()
+            )
+            self.entry_number = (last_entry.entry_number + 1) if last_entry else 1
+
+        super().save(*args, **kwargs)
+
+
+class JournalEntryLine(models.Model):
+    """
+    Individual line in a journal entry (debit or credit).
+
+    Each line must be EITHER a debit OR a credit (never both).
+    Lines are immutable once the journal entry is posted.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    journal_entry = models.ForeignKey(
+        JournalEntry,
+        on_delete=models.PROTECT,  # Never delete journal entries
+        related_name='lines',
+        help_text="The journal entry this line belongs to"
+    )
+
+    line_number = models.PositiveIntegerField(
+        help_text="Line number within this journal entry"
+    )
+
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name='journal_lines',
+        help_text="The account being debited or credited"
+    )
+
+    # CRITICAL: Use DecimalField with max_digits=15, decimal_places=2
+    # This maps to NUMERIC(15,2) in PostgreSQL
+    debit_amount = models.DecimalField(
+        max_digits=settings.ACCOUNTING_SETTINGS['MONEY_MAX_DIGITS'],
+        decimal_places=settings.ACCOUNTING_SETTINGS['MONEY_DECIMAL_PLACES'],
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text="Debit amount (must be 0 if credit is used)"
+    )
+
+    credit_amount = models.DecimalField(
+        max_digits=settings.ACCOUNTING_SETTINGS['MONEY_MAX_DIGITS'],
+        decimal_places=settings.ACCOUNTING_SETTINGS['MONEY_DECIMAL_PLACES'],
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text="Credit amount (must be 0 if debit is used)"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Line-specific description (optional)"
+    )
+
+    class Meta:
+        db_table = 'journal_entry_lines'
+        ordering = ['journal_entry', 'line_number']
+        unique_together = [['journal_entry', 'line_number']]
+        indexes = [
+            models.Index(fields=['journal_entry']),
+            models.Index(fields=['account']),
+        ]
+        constraints = [
+            # Ensure only debit OR credit (not both)
+            models.CheckConstraint(
+                check=(
+                    models.Q(debit_amount__gt=0, credit_amount=0) |
+                    models.Q(credit_amount__gt=0, debit_amount=0)
+                ),
+                name='debit_or_credit_not_both'
+            ),
+            # Ensure at least one amount is non-zero
+            models.CheckConstraint(
+                check=(
+                    models.Q(debit_amount__gt=0) |
+                    models.Q(credit_amount__gt=0)
+                ),
+                name='amount_required'
+            ),
+        ]
+
+    def __str__(self):
+        amount = self.debit_amount if self.debit_amount > 0 else self.credit_amount
+        side = "DR" if self.debit_amount > 0 else "CR"
+        return f"{self.account.account_number} {side} ${amount}"
+
+    def clean(self):
+        """Validate journal entry line"""
+        # Ensure only debit OR credit (not both)
+        if self.debit_amount > 0 and self.credit_amount > 0:
+            raise ValidationError("A line cannot have both debit and credit amounts")
+
+        # Ensure at least one amount is non-zero
+        if self.debit_amount == 0 and self.credit_amount == 0:
+            raise ValidationError("A line must have either a debit or credit amount")
+
+        # Validate account belongs to same tenant as journal entry
+        if self.account and self.journal_entry:
+            if self.account.tenant_id != self.journal_entry.tenant_id:
+                raise ValidationError("Account must belong to the same tenant as journal entry")
+
+
+# ============================================================================
+# SPRINT 2: Invoicing & Accounts Receivable Models
+# ============================================================================
+
+
+class Owner(models.Model):
+    """
+    Represents an HOA unit owner.
+
+    Owners can own multiple units and units can have multiple owners (co-ownership).
+    """
+
+    STATUS_ACTIVE = 'active'
+    STATUS_INACTIVE = 'inactive'
+    STATUS_DELINQUENT = 'delinquent'
+
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_INACTIVE, 'Inactive'),
+        (STATUS_DELINQUENT, 'Delinquent'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='owners',
+        help_text="The HOA (tenant) this owner belongs to"
+    )
+
+    # Personal information
+    first_name = models.CharField(max_length=100, help_text="Owner first name")
+    last_name = models.CharField(max_length=100, help_text="Owner last name")
+    email = models.EmailField(blank=True, help_text="Owner email address")
+    phone = models.CharField(max_length=20, blank=True, help_text="Owner phone number")
+
+    # Mailing address
+    mailing_address = models.TextField(blank=True, help_text="Mailing address for statements")
+
+    # Status
+    is_board_member = models.BooleanField(default=False, help_text="Is this owner a board member?")
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_ACTIVE,
+        help_text="Owner status"
+    )
+
+    # Metadata
+    notes = models.TextField(blank=True, help_text="Internal notes about this owner")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'owners'
+        ordering = ['last_name', 'first_name']
+        indexes = [
+            models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['email']),
+            models.Index(fields=['last_name', 'first_name']),
+        ]
+
+    def __str__(self):
+        return f"{self.first_name} {self.last_name}"
+
+    @property
+    def full_name(self):
+        return f"{self.first_name} {self.last_name}"
+
+    def get_ar_balance(self):
+        """Get total AR balance for this owner"""
+        from django.db.models import Sum
+        total = Invoice.objects.filter(
+            owner=self,
+            status__in=[Invoice.STATUS_ISSUED, Invoice.STATUS_OVERDUE]
+        ).aggregate(total=Sum('amount_due'))['total']
+        return total or Decimal('0.00')
+
+
+class Unit(models.Model):
+    """
+    Represents a unit/lot in the HOA.
+
+    Units have ownership history tracked through the Ownership model.
+    """
+
+    STATUS_OCCUPIED = 'occupied'
+    STATUS_VACANT = 'vacant'
+    STATUS_RENTED = 'rented'
+
+    STATUS_CHOICES = [
+        (STATUS_OCCUPIED, 'Occupied by Owner'),
+        (STATUS_VACANT, 'Vacant'),
+        (STATUS_RENTED, 'Rented/Leased'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='units',
+        help_text="The HOA (tenant) this unit belongs to"
+    )
+
+    # Unit identification
+    unit_number = models.CharField(
+        max_length=20,
+        help_text="Unit number (e.g., '123', 'A-5', 'Lot 42')"
+    )
+
+    # Property details
+    property_address = models.TextField(
+        blank=True,
+        help_text="Physical address of the unit"
+    )
+
+    bedrooms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Number of bedrooms"
+    )
+
+    bathrooms = models.DecimalField(
+        max_digits=3,
+        decimal_places=1,
+        null=True,
+        blank=True,
+        help_text="Number of bathrooms (e.g., 2.5)"
+    )
+
+    square_feet = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Square footage"
+    )
+
+    # Assessment information
+    monthly_assessment = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Monthly assessment amount"
+    )
+
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_OCCUPIED,
+        help_text="Unit status"
+    )
+
+    # Metadata
+    notes = models.TextField(blank=True, help_text="Internal notes about this unit")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'units'
+        ordering = ['unit_number']
+        unique_together = [['tenant', 'unit_number']]
+        indexes = [
+            models.Index(fields=['tenant', 'unit_number']),
+            models.Index(fields=['tenant', 'status']),
+        ]
+
+    def __str__(self):
+        return f"Unit {self.unit_number}"
+
+    def get_current_owners(self):
+        """Get list of current owners for this unit"""
+        return Owner.objects.filter(
+            ownerships__unit=self,
+            ownerships__is_current=True
+        ).distinct()
+
+
+class Ownership(models.Model):
+    """
+    Tracks ownership history for units.
+
+    Supports:
+    - Multiple owners per unit (co-ownership)
+    - Ownership percentage splits
+    - Historical ownership tracking
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='ownerships',
+        help_text="The HOA (tenant)"
+    )
+
+    owner = models.ForeignKey(
+        Owner,
+        on_delete=models.PROTECT,
+        related_name='ownerships',
+        help_text="The owner"
+    )
+
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name='ownerships',
+        help_text="The unit"
+    )
+
+    # Ownership details
+    ownership_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('100.00'),
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text="Ownership percentage (usually 100%, but can be split)"
+    )
+
+    # Date range
+    start_date = models.DateField(help_text="Ownership start date")
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Ownership end date (NULL = current owner)"
+    )
+
+    is_current = models.BooleanField(
+        default=True,
+        help_text="Is this the current ownership?"
+    )
+
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'ownerships'
+        ordering = ['-start_date']
+        indexes = [
+            models.Index(fields=['tenant', 'owner']),
+            models.Index(fields=['tenant', 'unit']),
+            models.Index(fields=['is_current']),
+        ]
+
+    def __str__(self):
+        return f"{self.owner} owns {self.ownership_percentage}% of {self.unit}"
+
+    def clean(self):
+        """Validate ownership"""
+        # Ensure owner and unit belong to same tenant
+        if self.owner and self.owner.tenant_id != self.tenant_id:
+            raise ValidationError("Owner must belong to the same tenant")
+        if self.unit and self.unit.tenant_id != self.tenant_id:
+            raise ValidationError("Unit must belong to the same tenant")
+
+        # If end_date is set, is_current should be False
+        if self.end_date and self.is_current:
+            raise ValidationError("Ownership with end_date cannot be current")
+
+
+class Invoice(models.Model):
+    """
+    Invoice issued to an owner for assessments, late fees, or other charges.
+
+    Each invoice creates a journal entry:
+    DR: AR (Asset)
+    CR: Revenue (by type)
+    """
+
+    # Invoice types
+    TYPE_ASSESSMENT = 'ASSESSMENT'
+    TYPE_LATE_FEE = 'LATE_FEE'
+    TYPE_SPECIAL = 'SPECIAL'
+    TYPE_OTHER = 'OTHER'
+
+    TYPE_CHOICES = [
+        (TYPE_ASSESSMENT, 'Monthly/Quarterly Assessment'),
+        (TYPE_LATE_FEE, 'Late Fee'),
+        (TYPE_SPECIAL, 'Special Assessment'),
+        (TYPE_OTHER, 'Other Charge'),
+    ]
+
+    # Status
+    STATUS_DRAFT = 'DRAFT'
+    STATUS_ISSUED = 'ISSUED'
+    STATUS_PARTIAL = 'PARTIAL'
+    STATUS_PAID = 'PAID'
+    STATUS_OVERDUE = 'OVERDUE'
+    STATUS_CANCELLED = 'CANCELLED'
+
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_ISSUED, 'Issued'),
+        (STATUS_PARTIAL, 'Partially Paid'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_OVERDUE, 'Overdue'),
+        (STATUS_CANCELLED, 'Cancelled'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='invoices',
+        help_text="The HOA (tenant)"
+    )
+
+    # Invoice identification
+    invoice_number = models.CharField(
+        max_length=20,
+        help_text="Invoice number (auto-generated: INV-00001)"
+    )
+
+    # Related entities
+    owner = models.ForeignKey(
+        Owner,
+        on_delete=models.PROTECT,
+        related_name='invoices',
+        help_text="The owner being invoiced"
+    )
+
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name='invoices',
+        help_text="The unit this invoice is for"
+    )
+
+    # Dates
+    invoice_date = models.DateField(help_text="Invoice date")
+    due_date = models.DateField(help_text="Payment due date")
+
+    # Type and status
+    invoice_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default=TYPE_ASSESSMENT,
+        help_text="Type of invoice"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT,
+        help_text="Invoice status"
+    )
+
+    # Amounts (NUMERIC(15,2))
+    subtotal = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Subtotal before late fees"
+    )
+
+    late_fee = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Late fee amount"
+    )
+
+    total_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Total amount (subtotal + late fee)"
+    )
+
+    amount_paid = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Amount paid so far"
+    )
+
+    amount_due = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Amount still owed (total - paid)"
+    )
+
+    # Description
+    description = models.TextField(blank=True, help_text="Invoice description")
+
+    # Linked journal entry (auto-created when invoice is issued)
+    journal_entry = models.ForeignKey(
+        JournalEntry,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='invoices',
+        help_text="Journal entry created for this invoice"
+    )
+
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'invoices'
+        ordering = ['-invoice_date', '-invoice_number']
+        unique_together = [['tenant', 'invoice_number']]
+        indexes = [
+            models.Index(fields=['tenant', 'invoice_number']),
+            models.Index(fields=['tenant', 'owner']),
+            models.Index(fields=['tenant', 'unit']),
+            models.Index(fields=['status']),
+            models.Index(fields=['due_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.invoice_number} - {self.owner} - ${self.total_amount}"
+
+    def clean(self):
+        """Validate invoice"""
+        # Ensure owner and unit belong to same tenant
+        if self.owner and self.owner.tenant_id != self.tenant_id:
+            raise ValidationError("Owner must belong to the same tenant")
+        if self.unit and self.unit.tenant_id != self.tenant_id:
+            raise ValidationError("Unit must belong to the same tenant")
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        """Override save to auto-generate invoice_number"""
+        is_new = self.pk is None
+        old_status = None
+
+        if not is_new:
+            try:
+                old_invoice = Invoice.objects.get(pk=self.pk)
+                old_status = old_invoice.status
+            except Invoice.DoesNotExist:
+                pass
+
+        if not self.invoice_number:
+            # Get the last invoice number for this tenant
+            last_invoice = (
+                Invoice.objects
+                .filter(tenant=self.tenant)
+                .order_by('-invoice_number')
+                .first()
+            )
+            if last_invoice and last_invoice.invoice_number.startswith('INV-'):
+                try:
+                    last_num = int(last_invoice.invoice_number.split('-')[1])
+                    next_num = last_num + 1
+                except (IndexError, ValueError):
+                    next_num = 1
+            else:
+                next_num = 1
+
+            self.invoice_number = f"INV-{next_num:05d}"
+
+        # Calculate total_amount and amount_due
+        self.total_amount = self.subtotal + self.late_fee
+        self.amount_due = self.total_amount - self.amount_paid
+
+        super().save(*args, **kwargs)
+
+        # Auto-create journal entry when invoice is issued (and doesn't have one yet)
+        if self.status == self.STATUS_ISSUED and not self.journal_entry:
+            if old_status != self.STATUS_ISSUED or is_new:
+                self.create_journal_entry()
+
+    def create_journal_entry(self):
+        """
+        Create journal entry for invoice:
+        DR: Accounts Receivable (1200)
+        CR: Revenue accounts (from invoice lines)
+
+        NOTE: Invoice lines must exist before calling this method!
+        """
+        if self.journal_entry:
+            return  # Already has journal entry
+
+        # Check if a journal entry already exists for this invoice
+        existing_je = JournalEntry.objects.filter(
+            tenant=self.tenant,
+            entry_type=JournalEntry.TYPE_INVOICE,
+            reference_id=self.id
+        ).first()
+
+        if existing_je:
+            # Link existing JE and return
+            Invoice.objects.filter(pk=self.pk).update(journal_entry=existing_je)
+            self.journal_entry = existing_je
+            return existing_je
+
+        # Get invoice lines - must exist!
+        invoice_lines = self.lines.all()
+        if not invoice_lines.exists():
+            # Invoice lines don't exist yet, skip journal entry creation
+            # It will be created later when lines are added
+            return None
+
+        # Get AR account (1200)
+        ar_account = Account.objects.filter(
+            tenant=self.tenant,
+            account_number='1200'
+        ).first()
+
+        if not ar_account:
+            raise ValidationError("AR account (1200) not found for tenant")
+
+        # Create journal entry
+        je = JournalEntry.objects.create(
+            tenant=self.tenant,
+            entry_date=self.invoice_date,
+            description=f"Invoice {self.invoice_number} - {self.owner}",
+            entry_type=JournalEntry.TYPE_INVOICE,
+            reference_id=self.id
+        )
+
+        # Debit line: AR
+        JournalEntryLine.objects.create(
+            journal_entry=je,
+            line_number=1,
+            account=ar_account,
+            debit_amount=self.total_amount,
+            credit_amount=Decimal('0.00'),
+            description=f"AR for invoice {self.invoice_number}"
+        )
+
+        # Credit lines: Revenue accounts (from invoice lines)
+        for idx, line in enumerate(invoice_lines, start=2):
+            JournalEntryLine.objects.create(
+                journal_entry=je,
+                line_number=idx,
+                account=line.account,
+                debit_amount=Decimal('0.00'),
+                credit_amount=line.amount,
+                description=line.description
+            )
+
+        # Link journal entry to invoice (use queryset update to avoid recursion)
+        Invoice.objects.filter(pk=self.pk).update(journal_entry=je)
+        self.journal_entry = je
+
+        return je
+
+    @property
+    def days_overdue(self):
+        """Calculate days overdue"""
+        if self.status in [self.STATUS_PAID, self.STATUS_CANCELLED]:
+            return 0
+        today = date.today()
+        if today > self.due_date:
+            return (today - self.due_date).days
+        return 0
+
+    @property
+    def aging_bucket(self):
+        """Get aging bucket for AR aging report"""
+        days = self.days_overdue
+        if days == 0:
+            return 'Current'
+        elif days <= 30:
+            return '1-30 days'
+        elif days <= 60:
+            return '31-60 days'
+        elif days <= 90:
+            return '61-90 days'
+        else:
+            return '90+ days'
+
+    def calculate_late_fee(self, grace_period_days=5, late_fee_percentage=Decimal('0.05'),
+                          minimum_late_fee=Decimal('25.00')):
+        """
+        Calculate late fee for overdue invoice.
+
+        Args:
+            grace_period_days: Number of days after due date before late fee applies (default: 5)
+            late_fee_percentage: Late fee as percentage of balance (default: 0.05 = 5%)
+            minimum_late_fee: Minimum late fee amount (default: $25.00)
+
+        Returns:
+            Decimal: Late fee amount, or 0 if not applicable
+
+        Business Rules:
+        - Late fee only applies after grace period
+        - Late fee is greater of: percentage of balance or minimum amount
+        - Late fee only applies once per invoice
+        - Paid/cancelled invoices don't get late fees
+        """
+        # No late fee if already paid or cancelled
+        if self.status in [self.STATUS_PAID, self.STATUS_CANCELLED]:
+            return Decimal('0.00')
+
+        # No late fee if already has one
+        if self.late_fee > 0:
+            return Decimal('0.00')
+
+        # Check if past grace period
+        days_overdue = self.days_overdue
+        if days_overdue <= grace_period_days:
+            return Decimal('0.00')
+
+        # Calculate late fee: greater of percentage or minimum
+        percentage_fee = self.amount_due * late_fee_percentage
+        late_fee = max(percentage_fee, minimum_late_fee)
+
+        return late_fee.quantize(Decimal('0.01'))
+
+    @transaction.atomic
+    def apply_late_fee(self, grace_period_days=5, late_fee_percentage=Decimal('0.05'),
+                      minimum_late_fee=Decimal('25.00')):
+        """
+        Apply late fee to invoice and create journal entry.
+
+        This creates:
+        1. Updates invoice.late_fee
+        2. Creates InvoiceLine for late fee
+        3. Creates journal entry: DR: AR, CR: Late Fee Revenue
+
+        Returns:
+            tuple: (late_fee_amount, journal_entry) or (0, None) if not applicable
+        """
+        late_fee_amount = self.calculate_late_fee(
+            grace_period_days=grace_period_days,
+            late_fee_percentage=late_fee_percentage,
+            minimum_late_fee=minimum_late_fee
+        )
+
+        if late_fee_amount == 0:
+            return (Decimal('0.00'), None)
+
+        # Get late fee revenue account (4200)
+        late_fee_revenue = Account.objects.filter(
+            tenant=self.tenant,
+            account_number='4200'
+        ).first()
+
+        if not late_fee_revenue:
+            # Create late fee revenue account if it doesn't exist
+            revenue_type = AccountType.objects.get(code='REVENUE')
+            operating_fund = Fund.objects.filter(
+                tenant=self.tenant,
+                fund_type=Fund.TYPE_OPERATING
+            ).first()
+
+            late_fee_revenue = Account.objects.create(
+                tenant=self.tenant,
+                fund=operating_fund,
+                account_type=revenue_type,
+                account_number='4200',
+                name='Late Fee Revenue'
+            )
+
+        # Update invoice late fee
+        self.late_fee = late_fee_amount
+        self.total_amount = self.subtotal + self.late_fee
+        self.amount_due = self.total_amount - self.amount_paid
+
+        # Save invoice (use queryset update to avoid triggering save() logic)
+        Invoice.objects.filter(pk=self.pk).update(
+            late_fee=self.late_fee,
+            total_amount=self.total_amount,
+            amount_due=self.amount_due
+        )
+
+        # Create invoice line for late fee
+        last_line = self.lines.order_by('-line_number').first()
+        next_line_number = (last_line.line_number + 1) if last_line else 1
+
+        InvoiceLine.objects.create(
+            invoice=self,
+            line_number=next_line_number,
+            description=f"Late fee ({self.days_overdue} days overdue)",
+            account=late_fee_revenue,
+            amount=late_fee_amount
+        )
+
+        # Create journal entry for late fee
+        ar_account = Account.objects.filter(
+            tenant=self.tenant,
+            account_number='1200'
+        ).first()
+
+        je = JournalEntry.objects.create(
+            tenant=self.tenant,
+            entry_date=date.today(),
+            description=f"Late fee for {self.invoice_number}",
+            entry_type=JournalEntry.TYPE_ADJUSTMENT,
+            reference_id=self.id
+        )
+
+        # Debit: AR
+        JournalEntryLine.objects.create(
+            journal_entry=je,
+            line_number=1,
+            account=ar_account,
+            debit_amount=late_fee_amount,
+            credit_amount=Decimal('0.00'),
+            description=f"Late fee for {self.invoice_number}"
+        )
+
+        # Credit: Late Fee Revenue
+        JournalEntryLine.objects.create(
+            journal_entry=je,
+            line_number=2,
+            account=late_fee_revenue,
+            debit_amount=Decimal('0.00'),
+            credit_amount=late_fee_amount,
+            description=f"Late fee revenue for {self.invoice_number}"
+        )
+
+        return (late_fee_amount, je)
+
+    def generate_pdf(self, output_path=None):
+        """
+        Generate PDF for this invoice.
+
+        Args:
+            output_path: Optional file path to save PDF. If None, returns BytesIO buffer.
+
+        Returns:
+            BytesIO buffer or None (if output_path provided)
+        """
+        from .pdf_generator import generate_invoice_pdf
+        return generate_invoice_pdf(self, output_path=output_path)
+
+    def generate_text_invoice(self):
+        """
+        Generate simple text representation of invoice (no PDF library required).
+
+        Returns:
+            str: Formatted text invoice
+        """
+        from .pdf_generator import generate_invoice_pdf_simple
+        return generate_invoice_pdf_simple(self)
+
+
+class InvoiceLine(models.Model):
+    """
+    Invoice line items linking to revenue accounts.
+
+    Each line represents a charge on an invoice and specifies which
+    revenue account should be credited when the invoice is posted.
+
+    Business rules:
+    - Line amounts must sum to invoice subtotal
+    - Each line must reference a valid revenue account
+    - Lines are immutable once invoice is issued
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text="Unique identifier for this invoice line"
+    )
+
+    invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.PROTECT,
+        related_name='lines',
+        help_text="Invoice this line belongs to"
+    )
+
+    line_number = models.PositiveIntegerField(
+        help_text="Line number within the invoice (1, 2, 3...)"
+    )
+
+    description = models.TextField(
+        help_text="Description of the charge (e.g., 'October 2025 Monthly Assessment')"
+    )
+
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name='invoice_lines',
+        help_text="Revenue account to credit when invoice is posted"
+    )
+
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Amount for this line item"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'invoice_lines'
+        ordering = ['invoice', 'line_number']
+        unique_together = [['invoice', 'line_number']]
+        indexes = [
+            models.Index(fields=['invoice', 'line_number']),
+            models.Index(fields=['account']),
+        ]
+        verbose_name = "Invoice Line"
+        verbose_name_plural = "Invoice Lines"
+
+    def __str__(self):
+        return f"Invoice {self.invoice.invoice_number} - Line {self.line_number}: ${self.amount}"
+
+
+class Payment(models.Model):
+    """
+    Payment received from an owner.
+
+    Tracks payments and their application to invoices using FIFO logic.
+    Creates journal entries when posted (DR: Cash, CR: AR).
+
+    Business rules:
+    - Amount = amount_applied + amount_unapplied (always)
+    - Payments are applied to oldest invoices first (FIFO)
+    - Unapplied amounts create a credit on owner's account
+    - Payments are immutable once posted
+    """
+
+    # Payment methods
+    METHOD_CHECK = 'CHECK'
+    METHOD_ACH = 'ACH'
+    METHOD_CREDIT_CARD = 'CREDIT_CARD'
+    METHOD_DEBIT_CARD = 'DEBIT_CARD'
+    METHOD_CASH = 'CASH'
+    METHOD_WIRE = 'WIRE'
+    METHOD_OTHER = 'OTHER'
+
+    METHOD_CHOICES = [
+        (METHOD_CHECK, 'Check'),
+        (METHOD_ACH, 'ACH/Bank Transfer'),
+        (METHOD_CREDIT_CARD, 'Credit Card'),
+        (METHOD_DEBIT_CARD, 'Debit Card'),
+        (METHOD_CASH, 'Cash'),
+        (METHOD_WIRE, 'Wire Transfer'),
+        (METHOD_OTHER, 'Other'),
+    ]
+
+    # Payment status
+    STATUS_PENDING = 'PENDING'
+    STATUS_CLEARED = 'CLEARED'
+    STATUS_BOUNCED = 'BOUNCED'
+    STATUS_REFUNDED = 'REFUNDED'
+    STATUS_CANCELLED = 'CANCELLED'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_CLEARED, 'Cleared'),
+        (STATUS_BOUNCED, 'Bounced'),
+        (STATUS_REFUNDED, 'Refunded'),
+        (STATUS_CANCELLED, 'Cancelled'),
+    ]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text="Unique identifier for this payment"
+    )
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='payments',
+        help_text="Tenant (HOA) this payment belongs to"
+    )
+
+    payment_number = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="Auto-generated payment number (PMT-00001, PMT-00002, etc.)"
+    )
+
+    owner = models.ForeignKey(
+        Owner,
+        on_delete=models.PROTECT,
+        related_name='payments',
+        help_text="Owner who made this payment"
+    )
+
+    payment_date = models.DateField(
+        help_text="Date the payment was received (accounting date)"
+    )
+
+    payment_method = models.CharField(
+        max_length=20,
+        choices=METHOD_CHOICES,
+        default=METHOD_CHECK,
+        help_text="Method of payment"
+    )
+
+    # Amounts
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Total payment amount received"
+    )
+
+    amount_applied = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Amount applied to invoices"
+    )
+
+    amount_unapplied = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Amount not yet applied (credit on account)"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_CLEARED,
+        help_text="Payment status"
+    )
+
+    # Metadata
+    reference_number = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Check number, transaction ID, confirmation number, etc."
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Additional notes about this payment"
+    )
+
+    # Link to auto-created journal entry
+    journal_entry = models.ForeignKey(
+        JournalEntry,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='payments',
+        help_text="Auto-created journal entry (DR: Cash, CR: AR)"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payments'
+        ordering = ['-payment_date', '-payment_number']
+        indexes = [
+            models.Index(fields=['tenant', 'payment_number']),
+            models.Index(fields=['owner', 'payment_date']),
+            models.Index(fields=['payment_date']),
+            models.Index(fields=['status']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(amount__gte=0),
+                name='payment_amount_non_negative'
+            ),
+            models.CheckConstraint(
+                check=models.Q(amount_applied__gte=0),
+                name='payment_amount_applied_non_negative'
+            ),
+            models.CheckConstraint(
+                check=models.Q(amount_unapplied__gte=0),
+                name='payment_amount_unapplied_non_negative'
+            ),
+        ]
+        verbose_name = "Payment"
+        verbose_name_plural = "Payments"
+
+    def __str__(self):
+        return f"{self.payment_number} - {self.owner} - ${self.amount}"
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        """Auto-generate payment number and create journal entry"""
+        is_new = self.pk is None
+
+        if not self.payment_number:
+            # Get the last payment number for this tenant
+            last_payment = Payment.objects.filter(
+                tenant=self.tenant
+            ).order_by('-payment_number').first()
+
+            if last_payment and last_payment.payment_number:
+                try:
+                    # Extract number from PMT-00001 format
+                    last_number = int(last_payment.payment_number.split('-')[1])
+                    next_number = last_number + 1
+                except (ValueError, IndexError):
+                    next_number = 1
+            else:
+                next_number = 1
+
+            self.payment_number = f"PMT-{next_number:05d}"
+
+        # Validate: amount = amount_applied + amount_unapplied
+        calculated_total = self.amount_applied + self.amount_unapplied
+        if abs(self.amount - calculated_total) > Decimal('0.01'):
+            raise ValueError(
+                f"Payment amount (${self.amount}) must equal applied (${self.amount_applied}) "
+                f"+ unapplied (${self.amount_unapplied})"
+            )
+
+        super().save(*args, **kwargs)
+
+        # Auto-create journal entry when payment is cleared (and doesn't have one yet)
+        if self.status == self.STATUS_CLEARED and not self.journal_entry and is_new:
+            self.create_journal_entry()
+
+    def create_journal_entry(self):
+        """
+        Create journal entry for payment:
+        DR: Cash (1100)
+        CR: Accounts Receivable (1200)
+        """
+        if self.journal_entry:
+            return  # Already has journal entry
+
+        # Get Cash account (1100)
+        cash_account = Account.objects.filter(
+            tenant=self.tenant,
+            account_number='1100'
+        ).first()
+
+        # Get AR account (1200)
+        ar_account = Account.objects.filter(
+            tenant=self.tenant,
+            account_number='1200'
+        ).first()
+
+        if not cash_account:
+            raise ValidationError("Cash account (1100) not found for tenant")
+        if not ar_account:
+            raise ValidationError("AR account (1200) not found for tenant")
+
+        # Create journal entry
+        je = JournalEntry.objects.create(
+            tenant=self.tenant,
+            entry_date=self.payment_date,
+            description=f"Payment {self.payment_number} from {self.owner}",
+            entry_type=JournalEntry.TYPE_PAYMENT,
+            reference_id=self.id
+        )
+
+        # Debit line: Cash
+        JournalEntryLine.objects.create(
+            journal_entry=je,
+            line_number=1,
+            account=cash_account,
+            debit_amount=self.amount,
+            credit_amount=Decimal('0.00'),
+            description=f"Cash received - {self.payment_method}"
+        )
+
+        # Credit line: AR
+        JournalEntryLine.objects.create(
+            journal_entry=je,
+            line_number=2,
+            account=ar_account,
+            debit_amount=Decimal('0.00'),
+            credit_amount=self.amount,
+            description=f"AR reduction for payment {self.payment_number}"
+        )
+
+        # Link journal entry to payment (use queryset update to avoid recursion)
+        Payment.objects.filter(pk=self.pk).update(journal_entry=je)
+        self.journal_entry = je
+
+        return je
+
+    def get_applications(self):
+        """Get all invoice applications for this payment"""
+        return self.applications.all().select_related('invoice')
+
+    @property
+    def is_fully_applied(self):
+        """Check if payment is fully applied to invoices"""
+        return self.amount_unapplied == Decimal('0.00')
+
+
+class PaymentApplication(models.Model):
+    """
+    Links a payment to a specific invoice.
+
+    When a payment is received, it's applied to one or more invoices
+    using FIFO logic (oldest invoices first).
+
+    Business rules:
+    - One payment can be applied to multiple invoices
+    - One invoice can receive multiple payment applications
+    - Sum of applications for a payment = payment.amount_applied
+    - Applications are immutable (create reversal if needed)
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text="Unique identifier for this payment application"
+    )
+
+    payment = models.ForeignKey(
+        Payment,
+        on_delete=models.PROTECT,
+        related_name='applications',
+        help_text="Payment being applied"
+    )
+
+    invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.PROTECT,
+        related_name='payment_applications',
+        help_text="Invoice receiving the payment"
+    )
+
+    amount_applied = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Amount of payment applied to this invoice"
+    )
+
+    applied_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this application was created"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Notes about this application"
+    )
+
+    class Meta:
+        db_table = 'payment_applications'
+        ordering = ['payment', 'applied_at']
+        indexes = [
+            models.Index(fields=['payment', 'applied_at']),
+            models.Index(fields=['invoice', 'applied_at']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(amount_applied__gt=0),
+                name='payment_application_amount_positive'
+            ),
+        ]
+        verbose_name = "Payment Application"
+        verbose_name_plural = "Payment Applications"
+
+    def __str__(self):
+        return f"{self.payment.payment_number} → {self.invoice.invoice_number}: ${self.amount_applied}"
+
+    def save(self, *args, **kwargs):
+        """Validate application amounts"""
+        # Ensure amount doesn't exceed invoice balance
+        if self.amount_applied > self.invoice.amount_due:
+            raise ValueError(
+                f"Cannot apply ${self.amount_applied} to invoice {self.invoice.invoice_number} "
+                f"with balance of ${self.invoice.amount_due}"
+            )
+
+        super().save(*args, **kwargs)
+
+        # Update invoice amounts
+        self.invoice.amount_paid += self.amount_applied
+        self.invoice.amount_due = self.invoice.total_amount - self.invoice.amount_paid
+
+        # Update invoice status
+        if self.invoice.amount_due == Decimal('0.00'):
+            self.invoice.status = Invoice.STATUS_PAID
+        elif self.invoice.amount_due < self.invoice.total_amount:
+            self.invoice.status = Invoice.STATUS_PARTIAL
+
+        self.invoice.save()
+
+
+class FundTransfer(models.Model):
+    """
+    Represents a transfer of funds between two funds (e.g., Operating → Reserve).
+
+    Creates balanced journal entry transferring funds between different fund accounts.
+    Common use case: Monthly reserve contributions from operating fund.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.PROTECT,
+        related_name='fund_transfers',
+        help_text="The HOA (tenant) this transfer belongs to"
+    )
+
+    transfer_number = models.CharField(
+        max_length=20,
+        unique=True,
+        help_text="Unique transfer number (e.g., TR-00001)"
+    )
+
+    transfer_date = models.DateField(
+        help_text="Date of the transfer"
+    )
+
+    from_fund = models.ForeignKey(
+        'Fund',
+        on_delete=models.PROTECT,
+        related_name='transfers_out',
+        help_text="Source fund (e.g., Operating)"
+    )
+
+    to_fund = models.ForeignKey(
+        'Fund',
+        on_delete=models.PROTECT,
+        related_name='transfers_in',
+        help_text="Destination fund (e.g., Reserve)"
+    )
+
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text="Transfer amount"
+    )
+
+    description = models.TextField(
+        help_text="Description/memo for the transfer"
+    )
+
+    journal_entry = models.OneToOneField(
+        'JournalEntry',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='fund_transfer',
+        help_text="Journal entry recording this transfer"
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="User who created this transfer"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'fund_transfers'
+        ordering = ['-transfer_date', '-transfer_number']
+        indexes = [
+            models.Index(fields=['tenant', 'transfer_date']),
+            models.Index(fields=['from_fund', 'transfer_date']),
+            models.Index(fields=['to_fund', 'transfer_date']),
+        ]
+
+    def clean(self):
+        """Validate transfer"""
+        if self.from_fund == self.to_fund:
+            raise ValidationError("Cannot transfer funds to the same fund")
+
+        if self.from_fund.tenant != self.to_fund.tenant:
+            raise ValidationError("Cannot transfer funds between different tenants")
+
+        if self.amount <= 0:
+            raise ValidationError("Transfer amount must be positive")
+
+    def __str__(self):
+        return f"{self.transfer_number}: ${self.amount} from {self.from_fund.name} to {self.to_fund.name}"
+
+    @transaction.atomic
+    def create_journal_entry(self):
+        """
+        Create journal entry for fund transfer:
+
+        DR: To Fund Cash (e.g., Reserve Cash - 6100)     $X,XXX
+        CR: From Fund Cash (e.g., Operating Cash - 1100)  $X,XXX
+        """
+        # Get or create next entry number
+        last_entry = JournalEntry.objects.filter(tenant=self.tenant).order_by('-entry_number').first()
+        next_number = (last_entry.entry_number + 1) if last_entry else 1
+
+        # Create journal entry
+        entry = JournalEntry.objects.create(
+            tenant=self.tenant,
+            entry_number=next_number,
+            entry_date=self.transfer_date,
+            description=f"Fund Transfer {self.transfer_number}: {self.description}",
+            entry_type=JournalEntry.TYPE_TRANSFER,
+            reference_id=str(self.id),
+            posted_at=timezone.now()
+        )
+
+        # Get cash accounts for both funds
+        from_cash_account = Account.objects.filter(
+            tenant=self.tenant,
+            fund=self.from_fund,
+            account_number='1100'  # Operating Cash
+        ).first()
+
+        to_cash_account = Account.objects.filter(
+            tenant=self.tenant,
+            fund=self.to_fund,
+            account_number='6100'  # Reserve Cash
+        ).first()
+
+        if not from_cash_account:
+            raise ValueError(f"Cash account not found for {self.from_fund.name}")
+        if not to_cash_account:
+            raise ValueError(f"Cash account not found for {self.to_fund.name}")
+
+        # Create journal entry lines
+        # Line 1: DR: To Fund Cash (increases reserve cash)
+        JournalEntryLine.objects.create(
+            journal_entry=entry,
+            line_number=1,
+            account=to_cash_account,
+            debit_amount=self.amount,
+            credit_amount=Decimal('0.00'),
+            description=f"Transfer from {self.from_fund.name}"
+        )
+
+        # Line 2: CR: From Fund Cash (decreases operating cash)
+        JournalEntryLine.objects.create(
+            journal_entry=entry,
+            line_number=2,
+            account=from_cash_account,
+            debit_amount=Decimal('0.00'),
+            credit_amount=self.amount,
+            description=f"Transfer to {self.to_fund.name}"
+        )
+
+        # Link journal entry to transfer
+        self.journal_entry = entry
+        FundTransfer.objects.filter(pk=self.pk).update(journal_entry=entry)
+
+        return entry
+
+
+class UserTenantMembership(models.Model):
+    """
+    Represents a user's membership in a tenant with a specific role.
+
+    Enables multi-tenant access control where users can belong to multiple tenants
+    with different roles in each tenant.
+    """
+
+    # Role choices
+    ROLE_SUPER_ADMIN = 'super_admin'
+    ROLE_ADMIN = 'admin'
+    ROLE_MANAGER = 'manager'
+    ROLE_ACCOUNTANT = 'accountant'
+    ROLE_BOARD = 'board'
+
+    ROLE_CHOICES = [
+        (ROLE_SUPER_ADMIN, 'Super Admin'),
+        (ROLE_ADMIN, 'Tenant Admin'),
+        (ROLE_MANAGER, 'Property Manager'),
+        (ROLE_ACCOUNTANT, 'Accountant'),
+        (ROLE_BOARD, 'Board Member'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='tenant_memberships',
+        help_text="The user"
+    )
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='user_memberships',
+        help_text="The tenant"
+    )
+
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        help_text="User's role in this tenant"
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this membership is active"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'user_tenant_memberships'
+        unique_together = [['user', 'tenant']]
+        indexes = [
+            models.Index(fields=['user', 'tenant']),
+            models.Index(fields=['tenant', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.tenant.name} ({self.get_role_display()})"
+
+    @staticmethod
+    def get_role_permissions(role):
+        """Return list of permissions for a given role"""
+        permissions = {
+            UserTenantMembership.ROLE_SUPER_ADMIN: [
+                'view_all_tenants', 'create_tenant', 'manage_tenant',
+                'create_invoice', 'create_payment', 'create_transfer',
+                'view_reports', 'manage_users', 'delete_records'
+            ],
+            UserTenantMembership.ROLE_ADMIN: [
+                'create_invoice', 'create_payment', 'create_transfer',
+                'view_reports', 'manage_users', 'send_emails',
+                'configure_settings'
+            ],
+            UserTenantMembership.ROLE_MANAGER: [
+                'create_invoice', 'create_payment', 'view_reports',
+                'send_emails'
+            ],
+            UserTenantMembership.ROLE_ACCOUNTANT: [
+                'view_reports', 'create_transfer', 'export_data'
+            ],
+            UserTenantMembership.ROLE_BOARD: [
+                'view_reports'
+            ],
+        }
+        return permissions.get(role, [])
+
+    def has_permission(self, permission):
+        """Check if this membership has a specific permission"""
+        return permission in self.get_role_permissions(self.role)
+
+
+class AuditLog(models.Model):
+    """
+    Audit log for tracking all important changes in the system.
+
+    Provides compliance and security tracking for financial transactions.
+    """
+
+    # Action types
+    ACTION_CREATE = 'CREATE'
+    ACTION_UPDATE = 'UPDATE'
+    ACTION_DELETE = 'DELETE'
+    ACTION_LOGIN = 'LOGIN'
+    ACTION_LOGOUT = 'LOGOUT'
+    ACTION_EXPORT = 'EXPORT'
+
+    ACTION_CHOICES = [
+        (ACTION_CREATE, 'Create'),
+        (ACTION_UPDATE, 'Update'),
+        (ACTION_DELETE, 'Delete'),
+        (ACTION_LOGIN, 'Login'),
+        (ACTION_LOGOUT, 'Logout'),
+        (ACTION_EXPORT, 'Export'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='audit_logs',
+        help_text="The tenant this action belongs to"
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='audit_logs',
+        help_text="User who performed the action"
+    )
+
+    action = models.CharField(
+        max_length=20,
+        choices=ACTION_CHOICES,
+        help_text="Type of action performed"
+    )
+
+    model_name = models.CharField(
+        max_length=100,
+        help_text="Name of the model that was changed"
+    )
+
+    object_id = models.UUIDField(
+        null=True,
+        blank=True,
+        help_text="ID of the object that was changed"
+    )
+
+    changes = models.JSONField(
+        default=dict,
+        help_text="Before/after values of changed fields"
+    )
+
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        help_text="IP address of the user"
+    )
+
+    user_agent = models.TextField(
+        blank=True,
+        default='',
+        help_text="User agent string"
+    )
+
+    timestamp = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this action occurred"
+    )
+
+    class Meta:
+        db_table = 'audit_logs'
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['tenant', '-timestamp']),
+            models.Index(fields=['user', '-timestamp']),
+            models.Index(fields=['model_name', 'object_id']),
+        ]
+
+    def __str__(self):
+        user_str = self.user.username if self.user else 'System'
+        return f"{user_str} - {self.action} {self.model_name} at {self.timestamp}"
+
+    @staticmethod
+    def log(tenant, user, action, model_name, object_id=None, changes=None, request=None):
+        """Create an audit log entry"""
+        ip_address = None
+        user_agent = ''
+
+        if request:
+            ip_address = request.META.get('REMOTE_ADDR')
+            user_agent = request.META.get('HTTP_USER_AGENT', '')
+
+        return AuditLog.objects.create(
+            tenant=tenant,
+            user=user,
+            action=action,
+            model_name=model_name,
+            object_id=object_id,
+            changes=changes or {},
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+
+
+class Budget(models.Model):
+    """
+    Annual operating budget for an HOA.
+    
+    Tracks budgeted amounts by account for fiscal planning and variance analysis.
+    """
+    
+    # Status choices
+    STATUS_DRAFT = 'DRAFT'
+    STATUS_APPROVED = 'APPROVED'
+    STATUS_ACTIVE = 'ACTIVE'
+    STATUS_CLOSED = 'CLOSED'
+    
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_CLOSED, 'Closed'),
+    ]
+    
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
+    
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='budgets'
+    )
+    
+    name = models.CharField(
+        max_length=200,
+        help_text="Budget name (e.g., 'FY 2025 Operating Budget')"
+    )
+    
+    fiscal_year = models.IntegerField(
+        help_text="Fiscal year for this budget"
+    )
+    
+    start_date = models.DateField(
+        help_text="Budget period start date"
+    )
+    
+    end_date = models.DateField(
+        help_text="Budget period end date"
+    )
+    
+    fund = models.ForeignKey(
+        Fund,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Specific fund (null = all funds)"
+    )
+    
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT
+    )
+    
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_budgets'
+    )
+    
+    approved_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+    
+    notes = models.TextField(
+        blank=True,
+        default='',
+        help_text="Budget notes and assumptions"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_budgets'
+    )
+    
+    class Meta:
+        db_table = 'budgets'
+        ordering = ['-fiscal_year', '-start_date']
+        indexes = [
+            models.Index(fields=['tenant', 'fiscal_year']),
+            models.Index(fields=['tenant', 'status']),
+        ]
+        unique_together = [['tenant', 'fiscal_year', 'fund']]
+    
+    def __str__(self):
+        return f"{self.name} ({self.fiscal_year})"
+    
+    def get_total_budgeted(self):
+        """Calculate total budgeted amount across all lines"""
+        return self.lines.aggregate(
+            total=models.Sum('budgeted_amount')
+        )['total'] or Decimal('0.00')
+    
+    def get_variance_report(self, as_of_date=None):
+        """
+        Generate budget vs actual variance report.
+        
+        Args:
+            as_of_date: Date to calculate actuals through (default: today)
+        
+        Returns:
+            dict: Variance report with budget vs actual by account
+        """
+        from datetime import date
+        from django.db.models import Sum, Q
+        
+        if as_of_date is None:
+            as_of_date = date.today()
+        
+        # Ensure date is within budget period
+        if as_of_date < self.start_date:
+            as_of_date = self.start_date
+        elif as_of_date > self.end_date:
+            as_of_date = self.end_date
+        
+        lines_data = []
+        total_budgeted = Decimal('0.00')
+        total_actual = Decimal('0.00')
+        
+        for line in self.lines.select_related('account'):
+            # Get actual expenses for this account in the budget period
+            journal_lines = JournalEntryLine.objects.filter(
+                journal_entry__tenant=self.tenant,
+                journal_entry__entry_date__gte=self.start_date,
+                journal_entry__entry_date__lte=as_of_date,
+                journal_entry__posted_at__isnull=False,
+                account=line.account
+            )
+            
+            # For expense accounts, sum debits - credits
+            # For revenue accounts, sum credits - debits
+            actual_amount = Decimal('0.00')
+            for jl in journal_lines:
+                if line.account.account_type.code == AccountType.CODE_EXPENSE:
+                    actual_amount += jl.debit_amount - jl.credit_amount
+                elif line.account.account_type.code == AccountType.CODE_REVENUE:
+                    actual_amount += jl.credit_amount - jl.debit_amount
+            
+            variance = line.budgeted_amount - actual_amount
+            variance_pct = (variance / line.budgeted_amount * 100) if line.budgeted_amount != 0 else Decimal('0.00')
+            
+            # Determine status
+            if abs(variance_pct) <= 5:
+                status = 'on_track'
+            elif variance > 0:
+                status = 'favorable'  # Under budget
+            else:
+                status = 'unfavorable'  # Over budget
+            
+            lines_data.append({
+                'account_number': line.account.account_number,
+                'account_name': line.account.name,
+                'budgeted': str(line.budgeted_amount),
+                'actual': str(actual_amount),
+                'variance': str(variance),
+                'variance_pct': f"{variance_pct:.1f}",
+                'status': status,
+                'notes': line.notes
+            })
+            
+            total_budgeted += line.budgeted_amount
+            total_actual += actual_amount
+        
+        total_variance = total_budgeted - total_actual
+        total_variance_pct = (total_variance / total_budgeted * 100) if total_budgeted != 0 else Decimal('0.00')
+        
+        return {
+            'budget_id': str(self.id),
+            'budget_name': self.name,
+            'fiscal_year': self.fiscal_year,
+            'period_start': self.start_date.isoformat(),
+            'period_end': self.end_date.isoformat(),
+            'as_of_date': as_of_date.isoformat(),
+            'lines': lines_data,
+            'totals': {
+                'budgeted': str(total_budgeted),
+                'actual': str(total_actual),
+                'variance': str(total_variance),
+                'variance_pct': f"{total_variance_pct:.1f}"
+            }
+        }
+
+
+class BudgetLine(models.Model):
+    """
+    Individual line item within a budget.
+    
+    Links a budgeted amount to a specific account.
+    """
+    
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
+    
+    budget = models.ForeignKey(
+        Budget,
+        on_delete=models.CASCADE,
+        related_name='lines'
+    )
+    
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        help_text="Account this budget line applies to"
+    )
+    
+    budgeted_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text="Budgeted amount for this account"
+    )
+    
+    notes = models.TextField(
+        blank=True,
+        default='',
+        help_text="Notes and assumptions for this budget line"
+    )
+    
+    class Meta:
+        db_table = 'budget_lines'
+        ordering = ['account__account_number']
+        unique_together = [['budget', 'account']]
+    
+    def __str__(self):
+        return f"{self.budget.name} - {self.account.account_number} ({self.budgeted_amount})"

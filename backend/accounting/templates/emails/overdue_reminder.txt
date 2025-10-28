@@ -1,0 +1,19 @@
+{{ tenant.name }}
+OVERDUE PAYMENT NOTICE
+
+Dear {{ owner.first_name }} {{ owner.last_name }},
+
+This is a reminder that the following invoice is now {{ days_overdue }} day(s) overdue.
+
+Invoice Number: {{ invoice.invoice_number }}
+Invoice Date: {{ invoice.invoice_date }}
+Due Date: {{ invoice.due_date }}
+Amount Due: ${{ total_due }}
+
+Please remit payment as soon as possible to avoid late fees and further action.
+
+If you have already made this payment, please disregard this notice.
+
+If you have any questions or need to arrange a payment plan, please contact us immediately.
+
+{{ tenant.name }} Management

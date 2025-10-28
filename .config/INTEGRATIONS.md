@@ -1,6 +1,6 @@
 # Integration Guide
 
-**Project:** saas202509
+**Project:** {{PROJECT_NAME}}
 **Template Version:** 2.0
 
 This document covers optional external tool integrations for your SaaS project.
@@ -79,6 +79,36 @@ See `.config/claude-code-templates-guide.md` for complete reference.
 - `webapp-testing` - Browser testing
 
 **Full guide:** `.config/recommended-claude-skills.md`
+
+---
+
+### Pandoc (Document Converter)
+
+**What:** Fast command-line tool for converting markdown to Word documents (.docx).
+
+**When:** Converting planning docs, PRDs, roadmaps to shareable Word format.
+
+**Setup (one-time):**
+```powershell
+# Run the included installer
+powershell.exe -ExecutionPolicy Bypass -File scripts\install-pandoc.ps1
+```
+
+**Usage:**
+```bash
+# Convert all markdown files in a folder
+cd fundraising/
+..\scripts\convert-to-docx.bat
+
+# Single file conversion
+pandoc document.md -o document.docx
+```
+
+**Performance:** 95% faster than manual coding (7 docs in seconds vs 3-5 hours)
+
+**Location:** `scripts/install-pandoc.ps1` and `scripts/convert-to-docx.bat`
+
+**Full docs:** `scripts/README.md`
 
 ---
 
@@ -189,5 +219,5 @@ Just ask Claude:
 
 ---
 
-**Last Updated:** 2025-10-27
+**Last Updated:** {{CREATION_DATE}}
 **Template Version:** 2.0
