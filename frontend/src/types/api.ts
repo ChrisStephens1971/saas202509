@@ -202,3 +202,82 @@ export interface BudgetVarianceReport {
     variance_pct: string
   }
 }
+
+// Bank Reconciliation Types
+export interface BankStatement {
+  id: string
+  fund: string | Fund
+  fund_name?: string
+  statement_date: string
+  beginning_balance: string
+  ending_balance: string
+  file_name: string
+  uploaded_at: string
+  uploaded_by?: string
+  uploaded_by_name?: string
+  reconciled: boolean
+  reconciled_at?: string | null
+  notes: string
+  matched_count?: number
+  unmatched_count?: number
+  total_deposits?: string
+  total_withdrawals?: string
+  calculated_balance?: string
+}
+
+export interface BankTransaction {
+  id: string
+  statement: string
+  statement_date?: string
+  transaction_date: string
+  post_date?: string | null
+  description: string
+  amount: string
+  check_number: string
+  reference_number: string
+  status: 'unmatched' | 'matched' | 'ignored' | 'created'
+  matched_entry?: string | null
+  matched_entry_description?: string | null
+  match_confidence: number
+  notes: string
+}
+
+export interface MatchSuggestion {
+  journal_entry: JournalEntry
+  confidence: number
+  reason: string
+}
+
+export interface ReconciliationReport {
+  statement: BankStatement
+  beginning_balance: string
+  total_deposits: string
+  total_withdrawals: string
+  ending_balance: string
+  calculated_balance: string
+  difference: string
+  matched_count: number
+  unmatched_count: number
+  ignored_count: number
+  transactions: BankTransaction[]
+}
+
+export interface UploadStatementRequest {
+  file: File
+  fund: string
+  statement_date: string
+  beginning_balance: string
+  ending_balance: string
+}
+
+export interface MatchTransactionRequest {
+  transaction_id: string
+  entry_id: string
+  notes?: string
+}
+
+export interface CreateFromTransactionRequest {
+  transaction_id: string
+  account_id: string
+  description?: string
+}

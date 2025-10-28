@@ -20,13 +20,16 @@ import io
 from tenants.models import Tenant
 from .models import (
     Account, Fund, JournalEntry, Owner, Unit, Invoice, Payment,
-    PaymentApplication, Budget, BudgetLine
+    PaymentApplication, Budget, BudgetLine, BankStatement, BankTransaction,
+    ReconciliationRule
 )
 from .serializers import (
     AccountSerializer, FundSerializer, OwnerSerializer, UnitSerializer,
     InvoiceSerializer, PaymentSerializer, JournalEntrySerializer,
     ARAgingSerializer, OwnerLedgerTransactionSerializer, DashboardMetricsSerializer,
-    BudgetSerializer, BudgetLineSerializer, BudgetCreateSerializer
+    BudgetSerializer, BudgetLineSerializer, BudgetCreateSerializer,
+    BankStatementSerializer, BankTransactionSerializer, ReconciliationRuleSerializer,
+    MatchSuggestionSerializer, ReconciliationReportSerializer
 )
 
 
@@ -982,3 +985,464 @@ class DashboardViewSet(viewsets.ViewSet):
         return Response({
             'activities': activities[:limit]
         })
+
+
+class BankReconciliationViewSet(viewsets.ViewSet):
+    """ViewSet for bank reconciliation operations."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['post'])
+    def upload_statement(self, request):
+        """
+        Upload and parse bank statement (CSV format).
+
+        Expected POST data:
+        - file: CSV file
+        - fund: Fund ID
+        - statement_date: YYYY-MM-DD
+        - beginning_balance: Decimal
+        - ending_balance: Decimal
+        """
+        tenant = get_tenant(request)
+
+        # Validate required fields
+        file_obj = request.FILES.get('file')
+        fund_id = request.data.get('fund')
+        statement_date = request.data.get('statement_date')
+        beginning_balance = request.data.get('beginning_balance')
+        ending_balance = request.data.get('ending_balance')
+
+        if not all([file_obj, fund_id, statement_date, beginning_balance, ending_balance]):
+            return Response(
+                {'error': 'Missing required fields: file, fund, statement_date, beginning_balance, ending_balance'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            fund = Fund.objects.get(id=fund_id, tenant=tenant)
+        except Fund.DoesNotExist:
+            return Response({'error': 'Fund not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Create BankStatement
+        statement = BankStatement.objects.create(
+            tenant=tenant,
+            fund=fund,
+            statement_date=statement_date,
+            beginning_balance=Decimal(beginning_balance),
+            ending_balance=Decimal(ending_balance),
+            file_name=file_obj.name,
+            uploaded_by=request.user
+        )
+
+        # Parse CSV file
+        try:
+            decoded_file = file_obj.read().decode('utf-8')
+            csv_reader = csv.DictReader(io.StringIO(decoded_file))
+
+            transactions_created = 0
+            for row in csv_reader:
+                # Expected CSV columns: date, description, amount, check_number (optional), reference (optional)
+                transaction_date = row.get('date') or row.get('Date') or row.get('DATE')
+                description = row.get('description') or row.get('Description') or row.get('DESCRIPTION')
+                amount = row.get('amount') or row.get('Amount') or row.get('AMOUNT')
+                check_number = row.get('check_number') or row.get('Check Number') or row.get('CHECK_NUMBER', '')
+                reference = row.get('reference') or row.get('Reference') or row.get('REFERENCE', '')
+
+                if not all([transaction_date, description, amount]):
+                    continue
+
+                BankTransaction.objects.create(
+                    tenant=tenant,
+                    statement=statement,
+                    transaction_date=transaction_date,
+                    description=description,
+                    amount=Decimal(amount),
+                    check_number=check_number,
+                    reference_number=reference,
+                    status=BankTransaction.STATUS_UNMATCHED
+                )
+                transactions_created += 1
+
+            return Response({
+                'statement': BankStatementSerializer(statement).data,
+                'transactions_created': transactions_created
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            # Rollback statement creation if parsing fails
+            statement.delete()
+            return Response(
+                {'error': f'Failed to parse CSV file: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['get'])
+    def statements(self, request):
+        """List all bank statements with optional filters."""
+        tenant = get_tenant(request)
+        queryset = BankStatement.objects.filter(tenant=tenant)
+
+        # Filter by fund
+        fund_id = request.query_params.get('fund')
+        if fund_id:
+            queryset = queryset.filter(fund_id=fund_id)
+
+        # Filter by reconciliation status
+        reconciled = request.query_params.get('reconciled')
+        if reconciled is not None:
+            queryset = queryset.filter(reconciled=reconciled.lower() == 'true')
+
+        queryset = queryset.select_related('fund', 'uploaded_by').order_by('-statement_date')
+        serializer = BankStatementSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def statement_detail(self, request, pk=None):
+        """Get statement details with all transactions."""
+        tenant = get_tenant(request)
+        try:
+            statement = BankStatement.objects.get(id=pk, tenant=tenant)
+        except BankStatement.DoesNotExist:
+            return Response({'error': 'Statement not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        transactions = statement.transactions.all().order_by('transaction_date', '-amount')
+
+        return Response({
+            'statement': BankStatementSerializer(statement).data,
+            'transactions': BankTransactionSerializer(transactions, many=True).data
+        })
+
+    @action(detail=False, methods=['get'])
+    def unmatched_transactions(self, request):
+        """Get all unmatched bank transactions."""
+        tenant = get_tenant(request)
+        queryset = BankTransaction.objects.filter(
+            tenant=tenant,
+            status=BankTransaction.STATUS_UNMATCHED
+        )
+
+        # Filter by statement
+        statement_id = request.query_params.get('statement')
+        if statement_id:
+            queryset = queryset.filter(statement_id=statement_id)
+
+        queryset = queryset.select_related('statement').order_by('transaction_date', '-amount')
+        serializer = BankTransactionSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def suggest_matches(self, request):
+        """
+        Suggest matches for a bank transaction using fuzzy matching.
+
+        POST data:
+        - transaction_id: BankTransaction ID
+        - max_suggestions: Maximum number of suggestions (default: 5)
+        """
+        tenant = get_tenant(request)
+        transaction_id = request.data.get('transaction_id')
+        max_suggestions = int(request.data.get('max_suggestions', 5))
+
+        if not transaction_id:
+            return Response({'error': 'transaction_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = BankTransaction.objects.get(id=transaction_id, tenant=tenant)
+        except BankTransaction.DoesNotExist:
+            return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Find potential matches in journal entries
+        suggestions = []
+
+        # Get journal entries within ±7 days and same fund
+        date_min = transaction.transaction_date - timedelta(days=7)
+        date_max = transaction.transaction_date + timedelta(days=7)
+
+        potential_entries = JournalEntry.objects.filter(
+            tenant=tenant,
+            fund=transaction.statement.fund,
+            entry_date__range=(date_min, date_max)
+        ).prefetch_related('lines')
+
+        for entry in potential_entries:
+            confidence = 0
+            reasons = []
+
+            # Calculate entry amount (sum of debits or credits, use larger)
+            entry_amount = abs(entry.amount)  # Use entry.amount if available
+            transaction_amount = abs(transaction.amount)
+
+            # Exact amount match: +50 points
+            if entry_amount == transaction_amount:
+                confidence += 50
+                reasons.append('Exact amount match')
+            # Close amount match (within 1%): +30 points
+            elif abs(entry_amount - transaction_amount) / transaction_amount < 0.01:
+                confidence += 30
+                reasons.append('Close amount match')
+            # Similar amount (within 10%): +15 points
+            elif abs(entry_amount - transaction_amount) / transaction_amount < 0.10:
+                confidence += 15
+                reasons.append('Similar amount')
+            else:
+                continue  # Skip if amount is too different
+
+            # Same date: +30 points
+            if entry.entry_date == transaction.transaction_date:
+                confidence += 30
+                reasons.append('Same date')
+            # Within 3 days: +20 points
+            elif abs((entry.entry_date - transaction.transaction_date).days) <= 3:
+                confidence += 20
+                reasons.append('Close date')
+            # Within 7 days: +10 points
+            else:
+                confidence += 10
+                reasons.append('Date within range')
+
+            # Check number match: +20 points
+            if transaction.check_number and transaction.check_number in entry.description:
+                confidence += 20
+                reasons.append('Check number match')
+
+            # Description similarity (simple keyword matching)
+            transaction_words = set(transaction.description.lower().split())
+            entry_words = set(entry.description.lower().split())
+            common_words = transaction_words & entry_words
+            if len(common_words) > 0:
+                similarity = len(common_words) / max(len(transaction_words), len(entry_words))
+                if similarity > 0.3:
+                    confidence += int(similarity * 20)
+                    reasons.append(f'Description similarity ({int(similarity * 100)}%)')
+
+            # Add to suggestions if confidence > 40
+            if confidence >= 40:
+                suggestions.append({
+                    'journal_entry': entry,
+                    'confidence': min(confidence, 100),  # Cap at 100
+                    'reason': ', '.join(reasons)
+                })
+
+        # Sort by confidence and limit results
+        suggestions.sort(key=lambda x: x['confidence'], reverse=True)
+        suggestions = suggestions[:max_suggestions]
+
+        serializer = MatchSuggestionSerializer(suggestions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def match_transaction(self, request):
+        """
+        Match a bank transaction to a journal entry.
+
+        POST data:
+        - transaction_id: BankTransaction ID
+        - entry_id: JournalEntry ID
+        - notes: Optional notes
+        """
+        tenant = get_tenant(request)
+        transaction_id = request.data.get('transaction_id')
+        entry_id = request.data.get('entry_id')
+        notes = request.data.get('notes', '')
+
+        if not all([transaction_id, entry_id]):
+            return Response({'error': 'transaction_id and entry_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = BankTransaction.objects.get(id=transaction_id, tenant=tenant)
+            entry = JournalEntry.objects.get(id=entry_id, tenant=tenant)
+        except (BankTransaction.DoesNotExist, JournalEntry.DoesNotExist):
+            return Response({'error': 'Transaction or entry not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Update transaction
+        transaction.status = BankTransaction.STATUS_MATCHED
+        transaction.matched_entry = entry
+        transaction.match_confidence = 100  # Manual match = 100% confidence
+        transaction.notes = notes
+        transaction.save()
+
+        return Response({
+            'transaction': BankTransactionSerializer(transaction).data,
+            'message': 'Transaction matched successfully'
+        })
+
+    @action(detail=False, methods=['post'])
+    def unmatch_transaction(self, request):
+        """
+        Unmatch a previously matched transaction.
+
+        POST data:
+        - transaction_id: BankTransaction ID
+        """
+        tenant = get_tenant(request)
+        transaction_id = request.data.get('transaction_id')
+
+        if not transaction_id:
+            return Response({'error': 'transaction_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = BankTransaction.objects.get(id=transaction_id, tenant=tenant)
+        except BankTransaction.DoesNotExist:
+            return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        transaction.status = BankTransaction.STATUS_UNMATCHED
+        transaction.matched_entry = None
+        transaction.match_confidence = 0
+        transaction.save()
+
+        return Response({
+            'transaction': BankTransactionSerializer(transaction).data,
+            'message': 'Transaction unmatched successfully'
+        })
+
+    @action(detail=False, methods=['post'])
+    def ignore_transaction(self, request):
+        """
+        Mark transaction as ignored.
+
+        POST data:
+        - transaction_id: BankTransaction ID
+        - notes: Optional notes explaining why ignored
+        """
+        tenant = get_tenant(request)
+        transaction_id = request.data.get('transaction_id')
+        notes = request.data.get('notes', '')
+
+        if not transaction_id:
+            return Response({'error': 'transaction_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = BankTransaction.objects.get(id=transaction_id, tenant=tenant)
+        except BankTransaction.DoesNotExist:
+            return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        transaction.status = BankTransaction.STATUS_IGNORED
+        transaction.notes = notes
+        transaction.save()
+
+        return Response({
+            'transaction': BankTransactionSerializer(transaction).data,
+            'message': 'Transaction marked as ignored'
+        })
+
+    @action(detail=False, methods=['post'])
+    def create_from_transaction(self, request):
+        """
+        Create a journal entry from a bank transaction.
+
+        POST data:
+        - transaction_id: BankTransaction ID
+        - account_id: Account ID for the offset entry
+        - description: Entry description (optional, defaults to transaction description)
+        """
+        tenant = get_tenant(request)
+        transaction_id = request.data.get('transaction_id')
+        account_id = request.data.get('account_id')
+        description = request.data.get('description')
+
+        if not all([transaction_id, account_id]):
+            return Response({'error': 'transaction_id and account_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = BankTransaction.objects.get(id=transaction_id, tenant=tenant)
+            account = Account.objects.get(id=account_id, tenant=tenant)
+        except (BankTransaction.DoesNotExist, Account.DoesNotExist):
+            return Response({'error': 'Transaction or account not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Use transaction description if not provided
+        if not description:
+            description = transaction.description
+
+        # Determine if this is a deposit or withdrawal
+        amount = abs(transaction.amount)
+        is_deposit = transaction.amount > 0
+
+        # Get cash account for the fund (assuming account type 'Cash')
+        try:
+            cash_account = Account.objects.get(
+                tenant=tenant,
+                fund=transaction.statement.fund,
+                account_type__name='Cash'
+            )
+        except Account.DoesNotExist:
+            return Response(
+                {'error': 'Cash account not found for fund'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Create journal entry
+        from .services import JournalEntryService
+
+        # For deposits: Debit Cash, Credit specified account
+        # For withdrawals: Debit specified account, Credit Cash
+        if is_deposit:
+            lines = [
+                {'account': cash_account.id, 'debit': amount, 'credit': 0},
+                {'account': account.id, 'debit': 0, 'credit': amount}
+            ]
+        else:
+            lines = [
+                {'account': account.id, 'debit': amount, 'credit': 0},
+                {'account': cash_account.id, 'debit': 0, 'credit': amount}
+            ]
+
+        try:
+            entry = JournalEntryService.create_journal_entry(
+                tenant=tenant,
+                fund=transaction.statement.fund,
+                entry_date=transaction.transaction_date,
+                description=description,
+                lines=lines,
+                created_by=request.user
+            )
+
+            # Match the transaction to the new entry
+            transaction.status = BankTransaction.STATUS_CREATED
+            transaction.matched_entry = entry
+            transaction.match_confidence = 100
+            transaction.save()
+
+            return Response({
+                'entry': JournalEntrySerializer(entry).data,
+                'transaction': BankTransactionSerializer(transaction).data,
+                'message': 'Journal entry created and matched successfully'
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def reconciliation_report(self, request, pk=None):
+        """Generate reconciliation report for a statement."""
+        tenant = get_tenant(request)
+        try:
+            statement = BankStatement.objects.get(id=pk, tenant=tenant)
+        except BankStatement.DoesNotExist:
+            return Response({'error': 'Statement not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        transactions = statement.transactions.all()
+
+        # Calculate totals
+        matched_transactions = transactions.filter(status=BankTransaction.STATUS_MATCHED)
+        total_deposits = sum(t.amount for t in matched_transactions if t.amount > 0)
+        total_withdrawals = sum(abs(t.amount) for t in matched_transactions if t.amount < 0)
+
+        calculated_balance = statement.beginning_balance + Decimal(total_deposits) - Decimal(total_withdrawals)
+        difference = statement.ending_balance - calculated_balance
+
+        report = {
+            'statement': statement,
+            'beginning_balance': statement.beginning_balance,
+            'total_deposits': Decimal(total_deposits),
+            'total_withdrawals': Decimal(total_withdrawals),
+            'ending_balance': statement.ending_balance,
+            'calculated_balance': calculated_balance,
+            'difference': difference,
+            'matched_count': transactions.filter(status=BankTransaction.STATUS_MATCHED).count(),
+            'unmatched_count': transactions.filter(status=BankTransaction.STATUS_UNMATCHED).count(),
+            'ignored_count': transactions.filter(status=BankTransaction.STATUS_IGNORED).count(),
+            'transactions': transactions
+        }
+
+        serializer = ReconciliationReportSerializer(report)
+        return Response(serializer.data)

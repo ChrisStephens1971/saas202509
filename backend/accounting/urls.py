@@ -6,7 +6,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .api_views import (
     AccountViewSet, OwnerViewSet, InvoiceViewSet, PaymentViewSet,
-    BudgetViewSet, BudgetLineViewSet, DashboardViewSet,
+    BudgetViewSet, BudgetLineViewSet, DashboardViewSet, BankReconciliationViewSet,
     ar_aging_report, owner_ledger, dashboard_metrics, trial_balance
 )
 
@@ -19,6 +19,7 @@ router.register(r'payments', PaymentViewSet, basename='payment')
 router.register(r'budgets', BudgetViewSet, basename='budget')
 router.register(r'budget-lines', BudgetLineViewSet, basename='budget-line')
 router.register(r'dashboard', DashboardViewSet, basename='dashboard')
+router.register(r'reconciliation', BankReconciliationViewSet, basename='reconciliation')
 
 # URL patterns
 urlpatterns = [

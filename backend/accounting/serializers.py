@@ -7,7 +7,7 @@ from decimal import Decimal
 from .models import (
     Account, Fund, JournalEntry, JournalEntryLine,
     Owner, Unit, Ownership, Invoice, InvoiceLine, Payment, PaymentApplication,
-    Budget, BudgetLine
+    Budget, BudgetLine, BankStatement, BankTransaction, ReconciliationRule
 )
 
 
@@ -246,16 +246,108 @@ class BudgetCreateSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         lines_data = validated_data.pop('lines')
-        
+
         # Set tenant and created_by from context
         validated_data['tenant'] = self.context['tenant']
         validated_data['created_by'] = self.context['request'].user
-        
+
         # Create budget
         budget = Budget.objects.create(**validated_data)
-        
+
         # Create budget lines
         for line_data in lines_data:
             BudgetLine.objects.create(budget=budget, **line_data)
-        
+
         return budget
+
+
+class BankStatementSerializer(serializers.ModelSerializer):
+    """Serializer for BankStatement model."""
+    fund_name = serializers.CharField(source='fund.name', read_only=True)
+    uploaded_by_name = serializers.SerializerMethodField()
+    matched_count = serializers.IntegerField(read_only=True)
+    unmatched_count = serializers.SerializerMethodField()
+    total_deposits = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    total_withdrawals = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    calculated_balance = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = BankStatement
+        fields = [
+            'id', 'fund', 'fund_name', 'statement_date',
+            'beginning_balance', 'ending_balance', 'file_name',
+            'uploaded_at', 'uploaded_by', 'uploaded_by_name',
+            'reconciled', 'reconciled_at', 'notes',
+            'matched_count', 'unmatched_count',
+            'total_deposits', 'total_withdrawals', 'calculated_balance'
+        ]
+        read_only_fields = ['id', 'uploaded_at', 'uploaded_by', 'reconciled_at']
+
+    def get_uploaded_by_name(self, obj):
+        if obj.uploaded_by:
+            return obj.uploaded_by.get_full_name() or obj.uploaded_by.username
+        return None
+
+    def get_unmatched_count(self, obj):
+        return obj.transactions.filter(status=BankTransaction.STATUS_UNMATCHED).count()
+
+
+class BankTransactionSerializer(serializers.ModelSerializer):
+    """Serializer for BankTransaction model."""
+    statement_date = serializers.DateField(source='statement.statement_date', read_only=True)
+    matched_entry_description = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BankTransaction
+        fields = [
+            'id', 'statement', 'statement_date', 'transaction_date', 'post_date',
+            'description', 'amount', 'check_number', 'reference_number',
+            'status', 'matched_entry', 'matched_entry_description',
+            'match_confidence', 'notes'
+        ]
+        read_only_fields = ['id']
+
+    def get_matched_entry_description(self, obj):
+        if obj.matched_entry:
+            return obj.matched_entry.description
+        return None
+
+
+class ReconciliationRuleSerializer(serializers.ModelSerializer):
+    """Serializer for ReconciliationRule model."""
+    account_number = serializers.CharField(source='account.account_number', read_only=True)
+    account_name = serializers.CharField(source='account.name', read_only=True)
+    fund_name = serializers.CharField(source='fund.name', read_only=True)
+
+    class Meta:
+        model = ReconciliationRule
+        fields = [
+            'id', 'name', 'description_pattern',
+            'account', 'account_number', 'account_name',
+            'fund', 'fund_name',
+            'amount_min', 'amount_max', 'active',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class MatchSuggestionSerializer(serializers.Serializer):
+    """Serializer for match suggestions."""
+    journal_entry = JournalEntrySerializer(read_only=True)
+    confidence = serializers.IntegerField()
+    reason = serializers.CharField()
+
+
+class ReconciliationReportSerializer(serializers.Serializer):
+    """Serializer for reconciliation report."""
+    statement = BankStatementSerializer(read_only=True)
+    beginning_balance = serializers.DecimalField(max_digits=15, decimal_places=2)
+    total_deposits = serializers.DecimalField(max_digits=15, decimal_places=2)
+    total_withdrawals = serializers.DecimalField(max_digits=15, decimal_places=2)
+    ending_balance = serializers.DecimalField(max_digits=15, decimal_places=2)
+    calculated_balance = serializers.DecimalField(max_digits=15, decimal_places=2)
+    difference = serializers.DecimalField(max_digits=15, decimal_places=2)
+    matched_count = serializers.IntegerField()
+    unmatched_count = serializers.IntegerField()
+    ignored_count = serializers.IntegerField()
+    transactions = BankTransactionSerializer(many=True, read_only=True)
