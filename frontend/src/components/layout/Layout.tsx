@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { Button } from '../ui/Button'
-import { Home, FileText, DollarSign, BookOpen, Wallet, LogOut } from 'lucide-react'
+import { Home, FileText, DollarSign, BookOpen, Wallet, LogOut, RefreshCw } from 'lucide-react'
 
 interface LayoutProps {
   children: ReactNode
@@ -46,6 +46,10 @@ export function Layout({ children }: LayoutProps) {
                 <Link to="/budgets" className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:text-primary-600">
                   <Wallet className="w-4 h-4 mr-2" />
                   Budgets
+                </Link>
+                <Link to="/reconciliation" className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:text-primary-600">
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Reconciliation
                 </Link>
               </div>
             </div>

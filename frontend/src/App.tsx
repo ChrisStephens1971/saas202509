@@ -9,6 +9,8 @@ import { OwnerLedgerPage } from './pages/OwnerLedgerPage'
 import { BudgetsPage } from './pages/BudgetsPage'
 import { BudgetCreatePage } from './pages/BudgetCreatePage'
 import { BudgetVariancePage } from './pages/BudgetVariancePage'
+import { BankReconciliationPage } from './pages/BankReconciliationPage'
+import { ReconciliationDetailPage } from './pages/ReconciliationDetailPage'
 
 function App() {
   return (
@@ -76,6 +78,24 @@ function App() {
             element={
               <ProtectedRoute>
                 <BudgetVariancePage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/reconciliation"
+            element={
+              <ProtectedRoute>
+                <BankReconciliationPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/reconciliation/:id"
+            element={
+              <ProtectedRoute>
+                <ReconciliationDetailPage />
               </ProtectedRoute>
             }
           />
