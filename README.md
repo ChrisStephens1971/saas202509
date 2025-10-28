@@ -5,7 +5,7 @@ A comprehensive multi-tenant fund accounting system designed for Homeowners Asso
 **Project ID:** saas202509
 **Created:** 2025-10-27
 **Status:** Development Phase
-**Sprints Completed:** 11 of ~15-20 planned
+**Sprints Completed:** 12 of ~15-20 planned
 
 ---
 
@@ -198,12 +198,30 @@ npm run build
 
 **Files:** 12 files changed, 1,867 insertions, 170 deletions
 
+### Sprint 12: Bank Reconciliation (Completed 2025-10-28)
+**Goal:** Implement manual bank reconciliation with CSV import and transaction matching
+
+**Delivered:**
+- **Backend:** 3 models + 10 API endpoints
+  - BankStatement, BankTransaction, ReconciliationRule models
+  - CSV parsing with case-insensitive column support
+  - Fuzzy matching algorithm (confidence scoring: amount 50pts, date 30pts, check# 20pts, description 20pts)
+  - Match/unmatch/ignore/create_entry operations
+  - Reconciliation report generation
+
+- **Frontend:** 2 pages + navigation
+  - BankReconciliationPage (statement list, upload form, filtering)
+  - ReconciliationDetailPage (transaction matching interface)
+  - AI-powered match suggestions with confidence scores & reasoning
+  - Real-time status updates (matched/unmatched/ignored counters)
+
+**Files:** 13 files changed, 1,577 insertions, 9 deletions
+
 ---
 
 ## 🎯 Roadmap
 
-### Upcoming Sprints (12-15)
-- **Sprint 12:** Transaction Matching UI (bank reconciliation)
+### Upcoming Sprints (13-15)
 - **Sprint 13:** Reserve Planning Module (5-20 year forecasting)
 - **Sprint 14:** Advanced Reporting (custom report builder)
 - **Sprint 15:** Email Notification Preferences UI
@@ -236,15 +254,15 @@ npm run build
 
 ## 📊 Project Metrics
 
-### Code Stats (as of Sprint 11)
-- **Backend:** ~6,000 lines (Python)
-- **Frontend:** ~8,000 lines (TypeScript/TSX)
-- **Total:** ~14,000 lines of production code
+### Code Stats (as of Sprint 12)
+- **Backend:** ~7,500 lines (Python)
+- **Frontend:** ~9,000 lines (TypeScript/TSX)
+- **Total:** ~16,500 lines of production code
 - **Tests:** In development (saas202510)
 
 ### Progress
-- **Sprints Completed:** 11
-- **Estimated Remaining:** 4-9 sprints
+- **Sprints Completed:** 12
+- **Estimated Remaining:** 3-8 sprints
 - **Timeline:** 7-10 months to MVP
 - **Bug Fix Phase:** 6-12 months post-MVP
 
