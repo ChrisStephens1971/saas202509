@@ -4,16 +4,29 @@
   "templateType": "enterprise",
   "version": "2.0",
   "state": {
-    "hasGreeted": false,
-    "setupComplete": false,
-    "currentSprint": null,
-    "phase": "planning"
+    "hasGreeted": true,
+    "setupComplete": true,
+    "currentSprint": "sprint-10-frontend-enhancement",
+    "phase": "development",
+    "completedSprints": [
+      "sprint-01-accounting-foundation",
+      "sprint-02-tenant-management",
+      "sprint-03-owner-invoice-payment",
+      "sprint-04-journal-entries",
+      "sprint-05-reporting",
+      "sprint-06-email-notifications",
+      "sprint-07-frontend-foundation",
+      "sprint-08-frontend-features",
+      "sprint-09-automation-and-banking"
+    ]
   },
   "metadata": {
-    "tradeName": null,
-    "teamType": null,
-    "linearProjectId": "{{LINEAR_PROJECT_ID}}",
-    "linearProjectUrl": "{{LINEAR_PROJECT_URL}}"
+    "tradeName": "TBD",
+    "teamType": "solo",
+    "description": "Multi-tenant fund accounting system for HOAs with zero tolerance for financial errors",
+    "targetMarket": "Self-managed HOAs and property management companies (all sizes)",
+    "linearProjectId": "cc3e93df-85dd-4f66-a722-63b5abad28ce",
+    "linearProjectUrl": "https://linear.app/verdaio-saas-projects/project/accounting-b81e6c2bcbce"
   },
   "ports": {
     "frontend": "3009",
