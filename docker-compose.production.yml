@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: hoa-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hoaaccounting}
+      POSTGRES_USER: ${POSTGRES_USER:-hoaadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST_AUTH_METHOD: ${POSTGRES_HOST_AUTH_METHOD:-scram-sha-256}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    ports:
+      - "5409:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hoaadmin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hoa-network
+
+  # Django Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: hoa-backend
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hoaadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hoaaccounting}
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DEBUG: "False"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3009}
+      DJANGO_SETTINGS_MODULE: hoaaccounting.settings
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    ports:
+      - "8009:8009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hoa-network
+    command: >
+      sh -c "
+        python manage.py migrate --noinput &&
+        python manage.py collectstatic --noinput &&
+        gunicorn hoaaccounting.wsgi:application
+          --bind 0.0.0.0:8009
+          --workers 4
+          --worker-class gthread
+          --threads 2
+          --timeout 120
+          --access-logfile -
+          --error-logfile -
+      "
+
+  # React Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: hoa-frontend
+    restart: always
+    ports:
+      - "3009:3009"
+    depends_on:
+      - backend
+    networks:
+      - hoa-network
+
+  # Redis (for caching and sessions)
+  redis:
+    image: redis:7-alpine
+    container_name: hoa-redis
+    restart: always
+    ports:
+      - "6409:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - hoa-network
+
+volumes:
+  postgres_data:
+    driver: local
+  static_files:
+    driver: local
+  media_files:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  hoa-network:
+    driver: bridge

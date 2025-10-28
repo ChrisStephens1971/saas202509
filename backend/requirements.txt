@@ -17,6 +17,9 @@ django-filter==24.3  # URL filtering for DRF
 # Development
 django-extensions==3.2.3  # Extra management commands
 
+# Production Server
+gunicorn==21.2.0  # WSGI HTTP Server
+
 # Testing
 pytest==8.3.4
 pytest-django==4.9.0
