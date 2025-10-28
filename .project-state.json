@@ -6,7 +6,7 @@
   "state": {
     "hasGreeted": true,
     "setupComplete": true,
-    "currentSprint": "sprint-10-frontend-enhancement",
+    "currentSprint": null,
     "phase": "development",
     "completedSprints": [
       "sprint-01-accounting-foundation",
@@ -17,7 +17,9 @@
       "sprint-06-email-notifications",
       "sprint-07-frontend-foundation",
       "sprint-08-frontend-features",
-      "sprint-09-automation-and-banking"
+      "sprint-09-automation-and-banking",
+      "sprint-10-frontend-enhancement",
+      "sprint-11-dashboard-enhancement"
     ]
   },
   "metadata": {
