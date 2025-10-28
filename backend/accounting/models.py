@@ -2281,3 +2281,328 @@ class BudgetLine(models.Model):
     
     def __str__(self):
         return f"{self.budget.name} - {self.account.account_number} ({self.budgeted_amount})"
+
+
+class BankStatement(models.Model):
+    """
+    Imported bank statement for reconciliation.
+
+    Each statement represents a period of bank activity that needs to be reconciled
+    against the fund's journal entries.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='bank_statements'
+    )
+
+    fund = models.ForeignKey(
+        Fund,
+        on_delete=models.PROTECT,
+        related_name='bank_statements',
+        help_text="Fund this bank statement belongs to"
+    )
+
+    statement_date = models.DateField(
+        help_text="Statement period ending date"
+    )
+
+    beginning_balance = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Beginning balance from bank statement"
+    )
+
+    ending_balance = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Ending balance from bank statement"
+    )
+
+    file_name = models.CharField(
+        max_length=255,
+        help_text="Original filename of uploaded statement"
+    )
+
+    uploaded_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='uploaded_statements'
+    )
+
+    reconciled = models.BooleanField(
+        default=False,
+        help_text="True if reconciliation is complete"
+    )
+
+    reconciled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When reconciliation was completed"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        default='',
+        help_text="Reconciliation notes"
+    )
+
+    class Meta:
+        db_table = 'bank_statements'
+        ordering = ['-statement_date']
+        unique_together = [['fund', 'statement_date']]
+
+    def __str__(self):
+        return f"{self.fund.name} - {self.statement_date}"
+
+    @property
+    def matched_count(self):
+        """Count of matched transactions"""
+        return self.transactions.filter(status='matched').count()
+
+    @property
+    def unmatched_count(self):
+        """Count of unmatched transactions"""
+        return self.transactions.filter(status='unmatched').count()
+
+    @property
+    def total_deposits(self):
+        """Total deposits (positive amounts)"""
+        return self.transactions.filter(
+            amount__gt=0,
+            status__in=['matched', 'created']
+        ).aggregate(
+            total=models.Sum('amount')
+        )['total'] or Decimal('0.00')
+
+    @property
+    def total_withdrawals(self):
+        """Total withdrawals (negative amounts)"""
+        return self.transactions.filter(
+            amount__lt=0,
+            status__in=['matched', 'created']
+        ).aggregate(
+            total=models.Sum('amount')
+        )['total'] or Decimal('0.00')
+
+    @property
+    def calculated_balance(self):
+        """Calculate ending balance: beginning + deposits + withdrawals"""
+        return self.beginning_balance + self.total_deposits + self.total_withdrawals
+
+
+class BankTransaction(models.Model):
+    """
+    Individual transaction from bank statement.
+
+    Each transaction needs to be matched to a journal entry or have a new entry created.
+    """
+
+    STATUS_UNMATCHED = 'unmatched'
+    STATUS_MATCHED = 'matched'
+    STATUS_IGNORED = 'ignored'
+    STATUS_CREATED = 'created'
+
+    STATUS_CHOICES = [
+        (STATUS_UNMATCHED, 'Unmatched'),
+        (STATUS_MATCHED, 'Matched to Entry'),
+        (STATUS_IGNORED, 'Ignored'),
+        (STATUS_CREATED, 'Entry Created'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='bank_transactions'
+    )
+
+    statement = models.ForeignKey(
+        BankStatement,
+        on_delete=models.CASCADE,
+        related_name='transactions'
+    )
+
+    transaction_date = models.DateField(
+        help_text="Date transaction occurred"
+    )
+
+    post_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date transaction posted to account"
+    )
+
+    description = models.TextField(
+        help_text="Transaction description from bank"
+    )
+
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Transaction amount (positive=deposit, negative=withdrawal)"
+    )
+
+    check_number = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text="Check number if applicable"
+    )
+
+    reference_number = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        help_text="Bank reference or confirmation number"
+    )
+
+    # Matching fields
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_UNMATCHED,
+        db_index=True
+    )
+
+    matched_entry = models.ForeignKey(
+        JournalEntry,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='matched_bank_transactions',
+        help_text="Journal entry this transaction is matched to"
+    )
+
+    match_confidence = models.IntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Match confidence score (0-100)"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        default='',
+        help_text="Reconciliation notes"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'bank_transactions'
+        ordering = ['transaction_date', '-amount']
+        indexes = [
+            models.Index(fields=['status', 'transaction_date']),
+            models.Index(fields=['statement', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_date} - {self.description[:50]} ({self.amount})"
+
+    @property
+    def is_deposit(self):
+        """True if transaction is a deposit (positive amount)"""
+        return self.amount > 0
+
+    @property
+    def is_withdrawal(self):
+        """True if transaction is a withdrawal (negative amount)"""
+        return self.amount < 0
+
+
+class ReconciliationRule(models.Model):
+    """
+    Saved rules for automatic transaction matching.
+
+    Rules can be created based on patterns in transaction descriptions
+    to automatically suggest or apply matches.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='reconciliation_rules'
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Descriptive name for this rule"
+    )
+
+    description_pattern = models.CharField(
+        max_length=255,
+        help_text="Pattern to match in transaction description (case-insensitive)"
+    )
+
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.CASCADE,
+        help_text="Account to use when creating entries from matched transactions"
+    )
+
+    fund = models.ForeignKey(
+        Fund,
+        on_delete=models.CASCADE,
+        help_text="Fund to use when creating entries"
+    )
+
+    amount_min = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Minimum amount to match (optional)"
+    )
+
+    amount_max = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Maximum amount to match (optional)"
+    )
+
+    active = models.BooleanField(
+        default=True,
+        help_text="Whether this rule is currently active"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reconciliation_rules'
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.description_pattern})"
+
+    def matches(self, transaction: BankTransaction) -> bool:
+        """
+        Check if this rule matches a given transaction.
+        """
+        # Check description pattern (case-insensitive contains)
+        if self.description_pattern.lower() not in transaction.description.lower():
+            return False
+
+        # Check amount range if specified
+        if self.amount_min is not None and abs(transaction.amount) < self.amount_min:
+            return False
+
+        if self.amount_max is not None and abs(transaction.amount) > self.amount_max:
+            return False
+
+        return True

@@ -8,7 +8,8 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Sum, Q, F, ExpressionWrapper, Cast, IntegerField, Coalesce
+from django.db.models import Sum, Q, F, ExpressionWrapper, IntegerField
+from django.db.models.functions import Cast, Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from decimal import Decimal
