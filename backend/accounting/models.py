@@ -3148,3 +3148,445 @@ class ReportExecution(models.Model):
 
     def __str__(self):
         return f"{self.report.name} - {self.started_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+# ===========================
+# Delinquency & Collections Models
+# ===========================
+
+class LateFeeRule(models.Model):
+    """
+    Configurable late fee rules.
+
+    Can be flat fee, percentage, or both. Can be one-time or recurring.
+    """
+
+    # Fee type
+    TYPE_FLAT = 'FLAT'
+    TYPE_PERCENTAGE = 'PERCENTAGE'
+    TYPE_BOTH = 'BOTH'
+
+    TYPE_CHOICES = [
+        (TYPE_FLAT, 'Flat Fee'),
+        (TYPE_PERCENTAGE, 'Percentage of Balance'),
+        (TYPE_BOTH, 'Flat + Percentage'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='late_fee_rules'
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Rule name (e.g., 'Standard Late Fee')"
+    )
+
+    grace_period_days = models.IntegerField(
+        default=10,
+        validators=[MinValueValidator(0)],
+        help_text="Days after due date before late fee applies"
+    )
+
+    fee_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default=TYPE_FLAT
+    )
+
+    flat_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="Flat late fee amount"
+    )
+
+    percentage_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="Percentage of outstanding balance (e.g., 10.00 for 10%)"
+    )
+
+    max_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Maximum late fee amount (optional cap)"
+    )
+
+    is_recurring = models.BooleanField(
+        default=False,
+        help_text="Apply late fee every month while delinquent"
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this rule is currently active"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'late_fee_rules'
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.tenant.name})"
+
+    def calculate_fee(self, balance: Decimal) -> Decimal:
+        """Calculate late fee for given balance"""
+        if self.fee_type == self.TYPE_FLAT:
+            fee = self.flat_amount
+        elif self.fee_type == self.TYPE_PERCENTAGE:
+            fee = balance * (self.percentage_rate / Decimal('100.0'))
+        else:  # BOTH
+            fee = self.flat_amount + (balance * (self.percentage_rate / Decimal('100.0')))
+
+        # Apply cap if specified
+        if self.max_amount is not None:
+            fee = min(fee, self.max_amount)
+
+        return fee.quantize(Decimal('0.01'))
+
+
+class DelinquencyStatus(models.Model):
+    """
+    Per-owner delinquency status tracking.
+
+    Tracks current balance, aging buckets, and collection stage.
+    """
+
+    # Collection stages
+    STAGE_CURRENT = 'CURRENT'
+    STAGE_0_30 = '0_30_DAYS'
+    STAGE_31_60 = '31_60_DAYS'
+    STAGE_61_90 = '61_90_DAYS'
+    STAGE_90_PLUS = '90_PLUS_DAYS'
+    STAGE_ATTORNEY = 'ATTORNEY_REFERRAL'
+    STAGE_LIEN = 'LIEN_FILED'
+    STAGE_FORECLOSURE = 'FORECLOSURE'
+
+    STAGE_CHOICES = [
+        (STAGE_CURRENT, 'Current'),
+        (STAGE_0_30, '0-30 Days'),
+        (STAGE_31_60, '31-60 Days'),
+        (STAGE_61_90, '61-90 Days'),
+        (STAGE_90_PLUS, '90+ Days'),
+        (STAGE_ATTORNEY, 'Attorney Referral'),
+        (STAGE_LIEN, 'Lien Filed'),
+        (STAGE_FORECLOSURE, 'Foreclosure'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    owner = models.OneToOneField(
+        Owner,
+        on_delete=models.CASCADE,
+        related_name='delinquency_status'
+    )
+
+    current_balance = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Total outstanding balance"
+    )
+
+    balance_0_30 = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Balance 0-30 days old"
+    )
+
+    balance_31_60 = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Balance 31-60 days old"
+    )
+
+    balance_61_90 = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Balance 61-90 days old"
+    )
+
+    balance_90_plus = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Balance 90+ days old"
+    )
+
+    collection_stage = models.CharField(
+        max_length=30,
+        choices=STAGE_CHOICES,
+        default=STAGE_CURRENT
+    )
+
+    days_delinquent = models.IntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Days since first delinquency"
+    )
+
+    last_payment_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date of last payment received"
+    )
+
+    last_notice_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date of last collection notice sent"
+    )
+
+    is_payment_plan = models.BooleanField(
+        default=False,
+        help_text="Owner is on approved payment plan"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Internal notes about collection status"
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'delinquency_status'
+        verbose_name_plural = 'Delinquency statuses'
+
+    def __str__(self):
+        return f"{self.owner.full_name} - {self.get_collection_stage_display()} (${self.current_balance})"
+
+    @property
+    def is_delinquent(self):
+        """Check if owner is currently delinquent"""
+        return self.current_balance > 0
+
+
+class CollectionNotice(models.Model):
+    """
+    Collection notices sent to owners.
+
+    Tracks email and certified mail with delivery confirmation.
+    """
+
+    # Notice types
+    TYPE_FIRST_NOTICE = 'FIRST_NOTICE'
+    TYPE_SECOND_NOTICE = 'SECOND_NOTICE'
+    TYPE_FINAL_NOTICE = 'FINAL_NOTICE'
+    TYPE_PRE_LIEN = 'PRE_LIEN'
+    TYPE_LIEN_FILED = 'LIEN_FILED'
+    TYPE_ATTORNEY_REFERRAL = 'ATTORNEY_REFERRAL'
+
+    TYPE_CHOICES = [
+        (TYPE_FIRST_NOTICE, 'First Notice'),
+        (TYPE_SECOND_NOTICE, 'Second Notice'),
+        (TYPE_FINAL_NOTICE, 'Final Notice'),
+        (TYPE_PRE_LIEN, 'Pre-Lien Notice'),
+        (TYPE_LIEN_FILED, 'Lien Filed Notice'),
+        (TYPE_ATTORNEY_REFERRAL, 'Attorney Referral'),
+    ]
+
+    # Delivery methods
+    METHOD_EMAIL = 'EMAIL'
+    METHOD_CERTIFIED_MAIL = 'CERTIFIED_MAIL'
+    METHOD_REGULAR_MAIL = 'REGULAR_MAIL'
+
+    METHOD_CHOICES = [
+        (METHOD_EMAIL, 'Email'),
+        (METHOD_CERTIFIED_MAIL, 'Certified Mail'),
+        (METHOD_REGULAR_MAIL, 'Regular Mail'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    owner = models.ForeignKey(
+        Owner,
+        on_delete=models.CASCADE,
+        related_name='collection_notices'
+    )
+
+    notice_type = models.CharField(
+        max_length=30,
+        choices=TYPE_CHOICES
+    )
+
+    delivery_method = models.CharField(
+        max_length=20,
+        choices=METHOD_CHOICES
+    )
+
+    sent_date = models.DateField(
+        help_text="Date notice was sent"
+    )
+
+    balance_at_notice = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Outstanding balance when notice was sent"
+    )
+
+    tracking_number = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="USPS tracking number for certified mail"
+    )
+
+    delivered_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date notice was delivered (for certified mail)"
+    )
+
+    returned_undeliverable = models.BooleanField(
+        default=False,
+        help_text="Notice was returned as undeliverable"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Additional notes about this notice"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'collection_notices'
+        ordering = ['-sent_date']
+        indexes = [
+            models.Index(fields=['owner', '-sent_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_notice_type_display()} - {self.owner.full_name} ({self.sent_date})"
+
+
+class CollectionAction(models.Model):
+    """
+    Major collection actions (attorney referral, lien, foreclosure).
+
+    Requires board approval and tracks legal proceedings.
+    """
+
+    # Action types
+    ACTION_ATTORNEY_REFERRAL = 'ATTORNEY_REFERRAL'
+    ACTION_LIEN_FILED = 'LIEN_FILED'
+    ACTION_FORECLOSURE = 'FORECLOSURE'
+    ACTION_PAYMENT_PLAN = 'PAYMENT_PLAN'
+    ACTION_WRITE_OFF = 'WRITE_OFF'
+
+    ACTION_CHOICES = [
+        (ACTION_ATTORNEY_REFERRAL, 'Attorney Referral'),
+        (ACTION_LIEN_FILED, 'Lien Filed'),
+        (ACTION_FORECLOSURE, 'Foreclosure Initiated'),
+        (ACTION_PAYMENT_PLAN, 'Payment Plan Approved'),
+        (ACTION_WRITE_OFF, 'Bad Debt Write-Off'),
+    ]
+
+    # Status
+    STATUS_PENDING_APPROVAL = 'PENDING_APPROVAL'
+    STATUS_APPROVED = 'APPROVED'
+    STATUS_REJECTED = 'REJECTED'
+    STATUS_IN_PROGRESS = 'IN_PROGRESS'
+    STATUS_COMPLETED = 'COMPLETED'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING_APPROVAL, 'Pending Board Approval'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REJECTED, 'Rejected'),
+        (STATUS_IN_PROGRESS, 'In Progress'),
+        (STATUS_COMPLETED, 'Completed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    owner = models.ForeignKey(
+        Owner,
+        on_delete=models.CASCADE,
+        related_name='collection_actions'
+    )
+
+    action_type = models.CharField(
+        max_length=30,
+        choices=ACTION_CHOICES
+    )
+
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING_APPROVAL
+    )
+
+    requested_date = models.DateField(
+        help_text="Date action was requested"
+    )
+
+    approved_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date approved by board"
+    )
+
+    approved_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Board member who approved"
+    )
+
+    completed_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date action was completed"
+    )
+
+    balance_at_action = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Outstanding balance when action was taken"
+    )
+
+    attorney_name = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Attorney or firm handling case"
+    )
+
+    case_number = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Court case number (for liens/foreclosure)"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Details about this action"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'collection_actions'
+        ordering = ['-requested_date']
+        indexes = [
+            models.Index(fields=['owner', '-requested_date']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_action_type_display()} - {self.owner.full_name} ({self.status})"

@@ -9,7 +9,8 @@ from .models import (
     Owner, Unit, Ownership, Invoice, InvoiceLine, Payment, PaymentApplication,
     Budget, BudgetLine, BankStatement, BankTransaction, ReconciliationRule,
     ReserveStudy, ReserveComponent, ReserveScenario,
-    CustomReport, ReportExecution
+    CustomReport, ReportExecution,
+    LateFeeRule, DelinquencyStatus, CollectionNotice, CollectionAction
 )
 
 
@@ -461,3 +462,72 @@ class ReportExecutionSerializer(serializers.ModelSerializer):
             'error_message', 'result_cache', 'parameters', 'created_at'
         ]
         read_only_fields = ['id', 'started_at', 'created_at']
+
+
+# ===========================
+# Delinquency & Collections Serializers
+# ===========================
+
+class LateFeeRuleSerializer(serializers.ModelSerializer):
+    """Serializer for LateFeeRule model."""
+    fee_type_display = serializers.CharField(source='get_fee_type_display', read_only=True)
+
+    class Meta:
+        model = LateFeeRule
+        fields = [
+            'id', 'name', 'grace_period_days', 'fee_type', 'fee_type_display',
+            'flat_amount', 'percentage_rate', 'max_amount', 'is_recurring',
+            'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class DelinquencyStatusSerializer(serializers.ModelSerializer):
+    """Serializer for DelinquencyStatus model."""
+    owner_name = serializers.CharField(source='owner.full_name', read_only=True)
+    stage_display = serializers.CharField(source='get_collection_stage_display', read_only=True)
+
+    class Meta:
+        model = DelinquencyStatus
+        fields = [
+            'id', 'owner', 'owner_name', 'current_balance',
+            'balance_0_30', 'balance_31_60', 'balance_61_90', 'balance_90_plus',
+            'collection_stage', 'stage_display', 'days_delinquent',
+            'last_payment_date', 'last_notice_date', 'is_payment_plan',
+            'notes', 'updated_at'
+        ]
+        read_only_fields = ['id', 'updated_at']
+
+
+class CollectionNoticeSerializer(serializers.ModelSerializer):
+    """Serializer for CollectionNotice model."""
+    owner_name = serializers.CharField(source='owner.full_name', read_only=True)
+    notice_type_display = serializers.CharField(source='get_notice_type_display', read_only=True)
+    method_display = serializers.CharField(source='get_delivery_method_display', read_only=True)
+
+    class Meta:
+        model = CollectionNotice
+        fields = [
+            'id', 'owner', 'owner_name', 'notice_type', 'notice_type_display',
+            'delivery_method', 'method_display', 'sent_date', 'balance_at_notice',
+            'tracking_number', 'delivered_date', 'returned_undeliverable',
+            'notes', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class CollectionActionSerializer(serializers.ModelSerializer):
+    """Serializer for CollectionAction model."""
+    owner_name = serializers.CharField(source='owner.full_name', read_only=True)
+    action_type_display = serializers.CharField(source='get_action_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = CollectionAction
+        fields = [
+            'id', 'owner', 'owner_name', 'action_type', 'action_type_display',
+            'status', 'status_display', 'requested_date', 'approved_date',
+            'approved_by', 'completed_date', 'balance_at_action',
+            'attorney_name', 'case_number', 'notes', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
