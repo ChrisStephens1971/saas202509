@@ -3590,3 +3590,248 @@ class CollectionAction(models.Model):
 
     def __str__(self):
         return f"{self.get_action_type_display()} - {self.owner.full_name} ({self.status})"
+
+
+# ===========================
+# Auto-Matching Engine Models
+# ===========================
+
+class AutoMatchRule(models.Model):
+    """
+    Learned matching patterns for automated transaction matching.
+
+    Rules are created from successful manual matches and improve over time.
+    """
+
+    # Rule types
+    TYPE_EXACT = 'EXACT'
+    TYPE_FUZZY = 'FUZZY'
+    TYPE_PATTERN = 'PATTERN'
+    TYPE_REFERENCE = 'REFERENCE'
+    TYPE_ML = 'ML'
+
+    TYPE_CHOICES = [
+        (TYPE_EXACT, 'Exact Match'),
+        (TYPE_FUZZY, 'Fuzzy Match'),
+        (TYPE_PATTERN, 'Pattern Match'),
+        (TYPE_REFERENCE, 'Reference Match'),
+        (TYPE_ML, 'ML-Based Match'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='auto_match_rules'
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Rule name (auto-generated or custom)"
+    )
+
+    rule_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES
+    )
+
+    pattern = models.JSONField(
+        help_text="Rule pattern as JSON (amount range, date tolerance, description regex, etc.)"
+    )
+
+    target_account = models.ForeignKey(
+        Account,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Target account for matched transactions"
+    )
+
+    confidence_score = models.IntegerField(
+        default=50,
+        validators=[MinValueValidator(0), MinValueValidator(100)],
+        help_text="Confidence score (0-100)"
+    )
+
+    match_count = models.IntegerField(
+        default=0,
+        help_text="Number of successful matches using this rule"
+    )
+
+    accuracy_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Accuracy rate as percentage (verified matches / total matches)"
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this rule is currently active"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'auto_match_rules'
+        ordering = ['-confidence_score', '-match_count']
+        indexes = [
+            models.Index(fields=['tenant', '-confidence_score']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.confidence_score}% confidence)"
+
+
+class MatchResult(models.Model):
+    """
+    Cached matching results for bank transactions.
+
+    Stores potential matches with confidence scores for review.
+    """
+
+    # Match status
+    STATUS_SUGGESTED = 'SUGGESTED'
+    STATUS_ACCEPTED = 'ACCEPTED'
+    STATUS_REJECTED = 'REJECTED'
+    STATUS_AUTO_MATCHED = 'AUTO_MATCHED'
+
+    STATUS_CHOICES = [
+        (STATUS_SUGGESTED, 'Suggested'),
+        (STATUS_ACCEPTED, 'Accepted'),
+        (STATUS_REJECTED, 'Rejected'),
+        (STATUS_AUTO_MATCHED, 'Auto-Matched'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    bank_transaction = models.ForeignKey(
+        BankTransaction,
+        on_delete=models.CASCADE,
+        related_name='match_results'
+    )
+
+    matched_entry = models.ForeignKey(
+        JournalEntry,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='match_results'
+    )
+
+    rule_used = models.ForeignKey(
+        AutoMatchRule,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Rule that generated this match"
+    )
+
+    confidence_score = models.IntegerField(
+        validators=[MinValueValidator(0), MinValueValidator(100)],
+        help_text="Match confidence (0-100)"
+    )
+
+    match_explanation = models.TextField(
+        help_text="Explanation of why this match was suggested"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_SUGGESTED
+    )
+
+    reviewed_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who reviewed this match"
+    )
+
+    reviewed_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'match_results'
+        ordering = ['-confidence_score', '-created_at']
+        indexes = [
+            models.Index(fields=['bank_transaction', '-confidence_score']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"Match for {self.bank_transaction} ({self.confidence_score}%)"
+
+
+class MatchStatistics(models.Model):
+    """
+    Track overall matching performance metrics.
+
+    Aggregated daily stats for monitoring and improvement.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='match_statistics'
+    )
+
+    date = models.DateField(
+        help_text="Date for these statistics"
+    )
+
+    total_transactions = models.IntegerField(
+        default=0,
+        help_text="Total bank transactions processed"
+    )
+
+    auto_matched = models.IntegerField(
+        default=0,
+        help_text="Transactions auto-matched with high confidence"
+    )
+
+    manually_matched = models.IntegerField(
+        default=0,
+        help_text="Transactions matched manually"
+    )
+
+    unmatched = models.IntegerField(
+        default=0,
+        help_text="Transactions remaining unmatched"
+    )
+
+    auto_match_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Auto-match rate as percentage"
+    )
+
+    average_confidence = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Average confidence score of matches"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'match_statistics'
+        ordering = ['-date']
+        unique_together = [['tenant', 'date']]
+        indexes = [
+            models.Index(fields=['tenant', '-date']),
+        ]
+
+    def __str__(self):
+        return f"{self.tenant.name} - {self.date} ({self.auto_match_rate}% auto-matched)"
