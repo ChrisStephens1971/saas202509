@@ -8,7 +8,8 @@ from .models import (
     Account, Fund, JournalEntry, JournalEntryLine,
     Owner, Unit, Ownership, Invoice, InvoiceLine, Payment, PaymentApplication,
     Budget, BudgetLine, BankStatement, BankTransaction, ReconciliationRule,
-    ReserveStudy, ReserveComponent, ReserveScenario
+    ReserveStudy, ReserveComponent, ReserveScenario,
+    CustomReport, ReportExecution
 )
 
 
@@ -423,3 +424,40 @@ class FundingProjectionSerializer(serializers.Serializer):
     interest_earned = serializers.DecimalField(max_digits=15, decimal_places=2)
     ending_balance = serializers.DecimalField(max_digits=15, decimal_places=2)
     percent_funded = serializers.DecimalField(max_digits=5, decimal_places=2)
+
+
+# ===========================
+# Advanced Reporting Serializers
+# ===========================
+
+class CustomReportSerializer(serializers.ModelSerializer):
+    """Serializer for CustomReport model."""
+    report_type_display = serializers.CharField(source='get_report_type_display', read_only=True)
+    execution_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomReport
+        fields = [
+            'id', 'name', 'description', 'report_type', 'report_type_display',
+            'columns', 'filters', 'sort_by', 'is_public', 'is_favorite',
+            'created_by', 'execution_count', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_execution_count(self, obj):
+        return obj.executions.count()
+
+
+class ReportExecutionSerializer(serializers.ModelSerializer):
+    """Serializer for ReportExecution model."""
+    report_name = serializers.CharField(source='report.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = ReportExecution
+        fields = [
+            'id', 'report', 'report_name', 'executed_by', 'status', 'status_display',
+            'started_at', 'completed_at', 'row_count', 'execution_time_ms',
+            'error_message', 'result_cache', 'parameters', 'created_at'
+        ]
+        read_only_fields = ['id', 'started_at', 'created_at']

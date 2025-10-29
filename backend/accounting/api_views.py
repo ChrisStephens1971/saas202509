@@ -21,7 +21,8 @@ from tenants.models import Tenant
 from .models import (
     Account, Fund, JournalEntry, Owner, Unit, Invoice, Payment,
     PaymentApplication, Budget, BudgetLine, BankStatement, BankTransaction,
-    ReconciliationRule, ReserveStudy, ReserveComponent, ReserveScenario
+    ReconciliationRule, ReserveStudy, ReserveComponent, ReserveScenario,
+    CustomReport, ReportExecution
 )
 from .serializers import (
     AccountSerializer, FundSerializer, OwnerSerializer, UnitSerializer,
@@ -31,7 +32,7 @@ from .serializers import (
     BankStatementSerializer, BankTransactionSerializer, ReconciliationRuleSerializer,
     MatchSuggestionSerializer, ReconciliationReportSerializer,
     ReserveStudySerializer, ReserveComponentSerializer, ReserveScenarioSerializer,
-    FundingProjectionSerializer
+    FundingProjectionSerializer, CustomReportSerializer, ReportExecutionSerializer
 )
 
 
@@ -1636,3 +1637,166 @@ class ReserveScenarioViewSet(viewsets.ModelViewSet):
             })
 
         return Response(comparison)
+
+
+# ===========================
+# Advanced Reporting ViewSets
+# ===========================
+
+class CustomReportViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Custom Reports.
+
+    Allows users to create, save, and execute custom report templates.
+    """
+    serializer_class = CustomReportSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['report_type', 'is_public', 'is_favorite']
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'created_at', 'updated_at']
+    ordering = ['-is_favorite', 'name']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return CustomReport.objects.filter(tenant=tenant)
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        # TODO: Get actual user from request when auth is implemented
+        serializer.save(tenant=tenant, created_by='system')
+
+    @action(detail=True, methods=['post'])
+    def execute(self, request, pk=None):
+        """
+        Execute this custom report and return results.
+
+        Creates a ReportExecution record and returns the data.
+        """
+        import time
+        report = self.get_object()
+
+        # Create execution record
+        execution = ReportExecution.objects.create(
+            report=report,
+            executed_by=request.user.username if hasattr(request.user, 'username') else 'system',
+            status=ReportExecution.STATUS_RUNNING,
+            parameters=request.data.get('parameters', {})
+        )
+
+        start_time = time.time()
+
+        try:
+            # Execute report based on type
+            tenant = get_tenant(request)
+            result_data = self._execute_report(report, tenant, execution.parameters)
+
+            # Calculate execution time
+            execution_time = int((time.time() - start_time) * 1000)
+
+            # Update execution record
+            execution.status = ReportExecution.STATUS_COMPLETED
+            execution.completed_at = timezone.now()
+            execution.row_count = len(result_data)
+            execution.execution_time_ms = execution_time
+            execution.result_cache = result_data  # Cache results
+            execution.save()
+
+            return Response({
+                'execution_id': str(execution.id),
+                'status': 'completed',
+                'row_count': len(result_data),
+                'execution_time_ms': execution_time,
+                'data': result_data
+            })
+
+        except Exception as e:
+            execution.status = ReportExecution.STATUS_FAILED
+            execution.error_message = str(e)
+            execution.completed_at = timezone.now()
+            execution.save()
+
+            return Response(
+                {'error': str(e), 'execution_id': str(execution.id)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _execute_report(self, report, tenant, parameters):
+        """Execute report logic based on report type"""
+        # This is a simplified implementation
+        # In production, this would have full report execution logic
+
+        if report.report_type == CustomReport.TYPE_GENERAL_LEDGER:
+            # Get journal entries
+            entries = JournalEntry.objects.filter(fund__tenant=tenant)
+
+            # Apply filters from report.filters
+            if 'fund' in report.filters:
+                entries = entries.filter(fund_id=report.filters['fund'])
+            if 'date_from' in report.filters:
+                entries = entries.filter(date__gte=report.filters['date_from'])
+            if 'date_to' in report.filters:
+                entries = entries.filter(date__lte=report.filters['date_to'])
+
+            # Format results
+            return [
+                {
+                    'date': str(entry.date),
+                    'description': entry.description,
+                    'reference': entry.reference_number,
+                    'amount': str(entry.amount) if hasattr(entry, 'amount') else '0.00'
+                }
+                for entry in entries[:100]  # Limit for demo
+            ]
+
+        elif report.report_type == CustomReport.TYPE_AR_AGING:
+            # Get AR aging data
+            owners = Owner.objects.filter(tenant=tenant)
+            return [
+                {
+                    'owner': owner.full_name,
+                    'unit': str(owner.units.first()) if owner.units.exists() else 'N/A',
+                    'balance': '0.00'  # Simplified
+                }
+                for owner in owners[:100]
+            ]
+
+        else:
+            return [{'message': 'Report type not yet implemented'}]
+
+    @action(detail=True, methods=['get'])
+    def export_csv(self, request, pk=None):
+        """Export report results to CSV"""
+        report = self.get_object()
+        tenant = get_tenant(request)
+
+        # Execute report
+        result_data = self._execute_report(report, tenant, request.query_params.dict())
+
+        # Create CSV
+        output = io.StringIO()
+        if result_data:
+            writer = csv.DictWriter(output, fieldnames=result_data[0].keys())
+            writer.writeheader()
+            writer.writerows(result_data)
+
+        # Return as downloadable CSV
+        response = Response(output.getvalue(), content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{report.name}.csv"'
+        return response
+
+
+class ReportExecutionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for viewing report execution history.
+
+    Read-only - executions are created via CustomReportViewSet.execute()
+    """
+    serializer_class = ReportExecutionSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['report', 'status']
+    ordering_fields = ['started_at', 'execution_time_ms']
+    ordering = ['-started_at']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ReportExecution.objects.filter(report__tenant=tenant)

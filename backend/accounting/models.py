@@ -2958,3 +2958,193 @@ class ReserveScenario(models.Model):
             current_monthly = current_monthly * (Decimal('1.0') + increase_rate)
 
         return projections
+
+
+# ===========================
+# Advanced Reporting Models
+# ===========================
+
+class CustomReport(models.Model):
+    """
+    User-defined custom reports with saved filters and columns.
+
+    Allows users to create reusable report templates without developer involvement.
+    """
+
+    # Report types
+    TYPE_GENERAL_LEDGER = 'GENERAL_LEDGER'
+    TYPE_TRIAL_BALANCE = 'TRIAL_BALANCE'
+    TYPE_INCOME_STATEMENT = 'INCOME_STATEMENT'
+    TYPE_BALANCE_SHEET = 'BALANCE_SHEET'
+    TYPE_CASH_FLOW = 'CASH_FLOW'
+    TYPE_AR_AGING = 'AR_AGING'
+    TYPE_OWNER_LEDGER = 'OWNER_LEDGER'
+    TYPE_BUDGET_VARIANCE = 'BUDGET_VARIANCE'
+    TYPE_RESERVE_FUNDING = 'RESERVE_FUNDING'
+
+    TYPE_CHOICES = [
+        (TYPE_GENERAL_LEDGER, 'General Ledger'),
+        (TYPE_TRIAL_BALANCE, 'Trial Balance'),
+        (TYPE_INCOME_STATEMENT, 'Income Statement'),
+        (TYPE_BALANCE_SHEET, 'Balance Sheet'),
+        (TYPE_CASH_FLOW, 'Cash Flow Statement'),
+        (TYPE_AR_AGING, 'AR Aging Report'),
+        (TYPE_OWNER_LEDGER, 'Owner Ledger'),
+        (TYPE_BUDGET_VARIANCE, 'Budget Variance'),
+        (TYPE_RESERVE_FUNDING, 'Reserve Funding Analysis'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='custom_reports'
+    )
+
+    created_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who created this report (username or email)"
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Report name (e.g., 'Monthly AR Aging by Fund')"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Description of what this report shows"
+    )
+
+    report_type = models.CharField(
+        max_length=30,
+        choices=TYPE_CHOICES,
+        help_text="Base report type"
+    )
+
+    columns = models.JSONField(
+        default=list,
+        help_text="List of columns to include: ['date', 'account', 'amount', etc.]"
+    )
+
+    filters = models.JSONField(
+        default=dict,
+        help_text="Report filters as JSON: {'fund': 'uuid', 'date_from': '2025-01-01', etc.}"
+    )
+
+    sort_by = models.JSONField(
+        default=list,
+        help_text="Sort order: [{'field': 'date', 'direction': 'desc'}]"
+    )
+
+    is_public = models.BooleanField(
+        default=False,
+        help_text="Whether this report is shared with all users in tenant"
+    )
+
+    is_favorite = models.BooleanField(
+        default=False,
+        help_text="User's favorite reports (shown at top)"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'custom_reports'
+        ordering = ['-is_favorite', 'name']
+        indexes = [
+            models.Index(fields=['tenant', 'report_type']),
+            models.Index(fields=['tenant', 'created_by']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.get_report_type_display()})"
+
+
+class ReportExecution(models.Model):
+    """
+    History of report executions with cached results.
+
+    Stores execution metadata and optionally caches results for quick re-display.
+    """
+
+    # Status choices
+    STATUS_PENDING = 'PENDING'
+    STATUS_RUNNING = 'RUNNING'
+    STATUS_COMPLETED = 'COMPLETED'
+    STATUS_FAILED = 'FAILED'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_RUNNING, 'Running'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    report = models.ForeignKey(
+        CustomReport,
+        on_delete=models.CASCADE,
+        related_name='executions'
+    )
+
+    executed_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who executed this report"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING
+    )
+
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    row_count = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Number of rows returned"
+    )
+
+    execution_time_ms = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Execution time in milliseconds"
+    )
+
+    error_message = models.TextField(
+        blank=True,
+        help_text="Error message if execution failed"
+    )
+
+    result_cache = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Cached result data (optional, for fast re-display)"
+    )
+
+    parameters = models.JSONField(
+        default=dict,
+        help_text="Runtime parameters (date ranges, overrides, etc.)"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'report_executions'
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['report', '-started_at']),
+            models.Index(fields=['executed_by', '-started_at']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.report.name} - {self.started_at.strftime('%Y-%m-%d %H:%M')}"

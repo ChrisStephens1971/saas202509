@@ -8,6 +8,7 @@ from .api_views import (
     AccountViewSet, OwnerViewSet, InvoiceViewSet, PaymentViewSet,
     BudgetViewSet, BudgetLineViewSet, DashboardViewSet, BankReconciliationViewSet,
     FundViewSet, ReserveStudyViewSet, ReserveComponentViewSet, ReserveScenarioViewSet,
+    CustomReportViewSet, ReportExecutionViewSet,
     ar_aging_report, owner_ledger, dashboard_metrics, trial_balance
 )
 
@@ -25,6 +26,8 @@ router.register(r'funds', FundViewSet, basename='fund')
 router.register(r'reserve-studies', ReserveStudyViewSet, basename='reserve-study')
 router.register(r'reserve-components', ReserveComponentViewSet, basename='reserve-component')
 router.register(r'reserve-scenarios', ReserveScenarioViewSet, basename='reserve-scenario')
+router.register(r'custom-reports', CustomReportViewSet, basename='custom-report')
+router.register(r'report-executions', ReportExecutionViewSet, basename='report-execution')
 
 # URL patterns
 urlpatterns = [
