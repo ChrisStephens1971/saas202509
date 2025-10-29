@@ -2039,6 +2039,120 @@ class ViolationPhotoViewSet(viewsets.ModelViewSet):
         tenant = get_tenant(self.request)
         return ViolationPhoto.objects.filter(violation__tenant=tenant)
 
+    @action(detail=False, methods=['post'])
+    def upload(self, request):
+        """
+        Upload a photo for a violation.
+
+        Accepts multipart/form-data with:
+        - photo: image file (jpg, png, heic)
+        - violation_id: UUID of violation
+        - caption: optional caption
+        - taken_date: date photo was taken (YYYY-MM-DD)
+        """
+        from PIL import Image
+        from django.core.files.storage import default_storage
+        from django.core.files.base import ContentFile
+        import os
+
+        # Validate file presence
+        if 'photo' not in request.FILES:
+            return Response(
+                {'error': 'No photo file provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        photo_file = request.FILES['photo']
+        violation_id = request.data.get('violation_id')
+        caption = request.data.get('caption', '')
+        taken_date = request.data.get('taken_date', date.today())
+
+        # Validate violation
+        if not violation_id:
+            return Response(
+                {'error': 'violation_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        tenant = get_tenant(request)
+        try:
+            violation = Violation.objects.get(id=violation_id, tenant=tenant)
+        except Violation.DoesNotExist:
+            return Response(
+                {'error': 'Violation not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Validate file type
+        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/heic']
+        if photo_file.content_type not in allowed_types:
+            return Response(
+                {'error': f'Invalid file type. Allowed: {", ".join(allowed_types)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate file size (max 10MB)
+        if photo_file.size > 10 * 1024 * 1024:
+            return Response(
+                {'error': 'File size must be less than 10MB'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Open and validate image with Pillow
+            image = Image.open(photo_file)
+            image.verify()
+
+            # Reopen for processing (verify closes the file)
+            photo_file.seek(0)
+            image = Image.open(photo_file)
+
+            # Resize if too large (max 1920x1080)
+            max_width = 1920
+            max_height = 1080
+            if image.width > max_width or image.height > max_height:
+                image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+
+            # Convert RGBA to RGB if needed
+            if image.mode in ('RGBA', 'LA', 'P'):
+                background = Image.new('RGB', image.size, (255, 255, 255))
+                background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
+                image = background
+
+            # Save processed image
+            output = io.BytesIO()
+            image.save(output, format='JPEG', quality=85)
+            output.seek(0)
+
+            # Generate unique filename
+            file_extension = 'jpg'
+            file_name = f'violations/{tenant.id}/{violation_id}/{timezone.now().timestamp()}.{file_extension}'
+
+            # Save to storage (local for MVP, easily switchable to S3)
+            saved_path = default_storage.save(file_name, ContentFile(output.read()))
+
+            # Generate URL (for production with S3, this would be the S3 URL)
+            photo_url = request.build_absolute_uri(default_storage.url(saved_path))
+
+            # Create ViolationPhoto record
+            violation_photo = ViolationPhoto.objects.create(
+                tenant=tenant,
+                violation=violation,
+                photo_url=photo_url,
+                caption=caption,
+                taken_date=taken_date,
+                uploaded_by=request.user.email
+            )
+
+            serializer = self.get_serializer(violation_photo)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to process image: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 
 class ViolationNoticeViewSet(viewsets.ModelViewSet):
     """
@@ -2105,43 +2219,172 @@ class BoardPacketViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def generate_pdf(self, request, pk=None):
-        """Generate PDF for this board packet."""
+        """
+        Generate PDF for this board packet.
+
+        This endpoint:
+        1. Gathers all sections and their content
+        2. Generates PDF using ReportLab
+        3. Saves to local storage (or S3 in production)
+        4. Updates packet with PDF URL and status
+        """
+        from accounting.services.pdf_generator import BoardPacketPDFGenerator
+        from django.core.files.storage import default_storage
+        from django.core.files.base import ContentFile
+
         packet = self.get_object()
+        tenant = get_tenant(request)
 
-        # TODO: Implement PDF generation logic
-        # This would typically:
-        # 1. Gather all sections and their content
-        # 2. Render sections using a PDF library (e.g., ReportLab, WeasyPrint)
-        # 3. Upload PDF to storage (S3, etc.)
-        # 4. Update packet with PDF URL and status
-
+        # Update status to generating
         packet.status = 'generating'
         packet.save()
 
-        # Placeholder response
-        return Response({
-            'status': 'generating',
-            'message': 'PDF generation started. Check back shortly.'
-        })
+        try:
+            # Gather packet data
+            template = packet.template
+            sections = packet.sections.all().order_by('order')
+
+            # Build packet data structure
+            packet_data = {
+                'meeting_date': packet.meeting_date,
+                'template_name': template.name if template else 'Board Packet',
+                'hoa_name': tenant.name,
+                'header_text': template.header_text if template else '',
+                'footer_text': template.footer_text if template else 'Confidential - For Board Members Only',
+                'sections': []
+            }
+
+            # Add sections with their content
+            for section in sections:
+                section_data = {
+                    'section_type': section.section_type,
+                    'title': section.title,
+                    'content_data': section.content_data or {}
+                }
+                packet_data['sections'].append(section_data)
+
+            # Generate PDF
+            generator = BoardPacketPDFGenerator()
+            pdf_buffer = generator.generate_packet(packet_data)
+
+            # Save PDF to storage
+            file_name = f'board_packets/{tenant.id}/{packet.id}.pdf'
+            saved_path = default_storage.save(file_name, ContentFile(pdf_buffer.read()))
+
+            # Generate URL
+            pdf_url = request.build_absolute_uri(default_storage.url(saved_path))
+
+            # Update packet
+            packet.pdf_url = pdf_url
+            packet.status = 'ready'
+            packet.page_count = len(packet_data['sections']) + 2  # Sections + cover + TOC
+            packet.generated_at = timezone.now()
+            packet.save()
+
+            serializer = self.get_serializer(packet)
+            return Response({
+                'status': 'success',
+                'message': 'PDF generated successfully',
+                'packet': serializer.data
+            })
+
+        except Exception as e:
+            # Update status to error
+            packet.status = 'draft'
+            packet.save()
+
+            return Response({
+                'status': 'error',
+                'message': f'PDF generation failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'])
     def send_email(self, request, pk=None):
-        """Email board packet to recipients."""
+        """
+        Email board packet to recipients.
+
+        Request body:
+        {
+            "recipients": ["board@hoa.com", "president@hoa.com"],
+            "subject": "Optional custom subject",
+            "message": "Optional custom message"
+        }
+        """
+        from django.core.mail import EmailMessage
+        from django.conf import settings
+
         packet = self.get_object()
+        tenant = get_tenant(request)
+
         recipients = request.data.get('recipients', [])
+        if not recipients:
+            return Response({
+                'error': 'At least one recipient email is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-        # TODO: Implement email sending logic
-        # This would typically:
-        # 1. Ensure PDF is generated
-        # 2. Send email with PDF attachment or link
-        # 3. Update packet with sent_to and sent_at
+        # Ensure PDF is generated
+        if not packet.pdf_url or packet.status != 'ready':
+            return Response({
+                'error': 'PDF must be generated before sending. Call generate_pdf first.'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-        packet.sent_to = recipients
-        packet.sent_at = timezone.now()
-        packet.save()
+        try:
+            # Prepare email
+            subject = request.data.get('subject') or f'Board Packet - {packet.meeting_date}'
+            message = request.data.get('message') or f"""
+Dear Board Members,
 
-        serializer = self.get_serializer(packet)
-        return Response(serializer.data)
+Please find attached the board packet for the meeting on {packet.meeting_date}.
+
+This packet includes:
+- Cover Page
+- Table of Contents
+- Meeting sections ({packet.page_count} pages total)
+
+You can also view the packet online at: {packet.pdf_url}
+
+Best regards,
+{tenant.name}
+            """.strip()
+
+            # Create email
+            email = EmailMessage(
+                subject=subject,
+                body=message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to=recipients,
+            )
+
+            # Attach PDF if using local storage
+            # For S3, just include the link in the message
+            if packet.pdf_url and 'http' not in packet.pdf_url:
+                # Local file - attach it
+                from django.core.files.storage import default_storage
+                if default_storage.exists(packet.pdf_url):
+                    pdf_content = default_storage.open(packet.pdf_url).read()
+                    email.attach(f'board_packet_{packet.meeting_date}.pdf', pdf_content, 'application/pdf')
+
+            # Send email
+            email.send()
+
+            # Update packet
+            packet.sent_to = recipients
+            packet.sent_at = timezone.now()
+            packet.status = 'sent'
+            packet.save()
+
+            serializer = self.get_serializer(packet)
+            return Response({
+                'status': 'success',
+                'message': f'Board packet emailed to {len(recipients)} recipients',
+                'packet': serializer.data
+            })
+
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': f'Email sending failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PacketSectionViewSet(viewsets.ModelViewSet):

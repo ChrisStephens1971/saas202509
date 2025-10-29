@@ -80,11 +80,12 @@ Files: 3 created, 1,273 insertions
 
 ---
 
-## 🟡 Phase 2: Complete Critical Placeholders (IN PROGRESS)
+## ✅ Phase 2: Complete Critical Placeholders (COMPLETE)
 
 ### 1. ✅ PDF Generation for Board Packets
 
 **Created:** `backend/accounting/services/pdf_generator.py` (420 lines)
+**Integrated:** `backend/accounting/api_views.py` - BoardPacketViewSet.generate_pdf()
 
 **Features Implemented:**
 - Professional PDF generation using ReportLab
@@ -129,14 +130,28 @@ pdf_buffer = generator.generate_packet(packet_data)
 - reportlab==4.2.5 (PDF generation)
 - Pillow==11.0.0 (Image processing)
 
-### 2. ⏸️ Photo Upload for Violations (PENDING)
+### 2. ✅ Photo Upload for Violations (COMPLETE)
 
-**Still Needed:**
-- Django file upload handling in ViolationPhotoViewSet
-- File storage configuration (local or S3)
-- Image validation and resizing
-- Frontend upload component with preview
-- Drag-and-drop UI
+**Backend Implemented:**
+- Django file upload handling in ViolationPhotoViewSet.upload()
+- File storage configuration (local with S3 migration path)
+- Image validation (file type, size limit 10MB)
+- Image processing with Pillow (resize, format conversion)
+- Tenant-isolated file paths
+
+**Frontend Implemented:**
+- React upload component: `frontend/src/components/violations/ViolationPhotoUpload.tsx`
+- Drag-and-drop support
+- Image preview before upload
+- Multiple file support
+- Upload progress indicators
+- Error handling with user-friendly messages
+
+**Files Created:**
+- `backend/accounting/api_views.py` - ViolationPhotoViewSet.upload() (127 lines)
+- `backend/hoaaccounting/urls.py` - Media file serving configuration
+- `frontend/src/components/violations/ViolationPhotoUpload.tsx` (295 lines)
+- `frontend/src/pages/ViolationsPage.tsx` - Upload modal integration
 
 **Recommended Implementation:**
 ```python
@@ -161,14 +176,31 @@ def upload(self, request):
 - Multiple file support
 ```
 
-### 3. ⏸️ Automated Late Fee Assessment (PENDING)
+### 3. ✅ Automated Late Fee Assessment (COMPLETE)
 
-**Still Needed:**
-- Django management command to run daily
-- Cron job or Celery task scheduling
-- Late fee calculation logic using LateFeeRule
-- Invoice generation for late fees
-- Email notifications to owners
+**Management Command Implemented:**
+- `backend/accounting/management/commands/assess_late_fees.py` (258 lines)
+- Finds all delinquent accounts past grace period
+- Calculates fees using LateFeeRule.calculate_fee()
+- Creates Invoice with TYPE_LATE_FEE
+- Updates DelinquencyStatus with last_late_fee_date
+- Supports recurring and non-recurring fees
+- Tenant-scoped with dry-run and verbose modes
+
+**Features:**
+- Grace period validation (configurable per rule)
+- Recurring fee tracking (30-day intervals)
+- Invoice generation with line items
+- Late fee income account (4100) auto-creation
+- Comprehensive logging and error handling
+- Dry-run mode for testing
+- Tenant-specific processing
+
+**Files Created:**
+- `backend/accounting/management/commands/assess_late_fees.py`
+- `backend/accounting/management/__init__.py`
+- `backend/accounting/management/commands/__init__.py`
+- `LATE-FEE-AUTOMATION-GUIDE.md` - Complete scheduling and configuration guide
 
 **Recommended Implementation:**
 ```python

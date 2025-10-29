@@ -3,18 +3,29 @@
  */
 
 import { useState, useEffect } from 'react';
-import { AlertOctagon, Camera, Plus } from 'lucide-react';
+import { AlertOctagon, Camera, Plus, X, Upload as UploadIcon } from 'lucide-react';
 import { getViolations, Violation } from '../api/violations';
+import ViolationPhotoUpload from '../components/violations/ViolationPhotoUpload';
 
 export default function ViolationsPage() {
   const [violations, setViolations] = useState<Violation[]>([]);
   const [loading, setLoading] = useState(true);
   const [severityFilter, setSeverityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [selectedViolation, setSelectedViolation] = useState<Violation | null>(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   useEffect(() => {
-    getViolations().then(setViolations).finally(() => setLoading(false));
+    loadViolations();
   }, []);
+
+  const loadViolations = () => {
+    getViolations().then(setViolations).finally(() => setLoading(false));
+  };
+
+  const handleUploadComplete = () => {
+    loadViolations();
+  };
 
   const getSeverityColor = (severity: string) => {
     const colors = {
@@ -110,11 +121,54 @@ export default function ViolationsPage() {
                   </div>
                 </div>
                 <div className="mt-3 text-sm text-gray-700">{violation.description}</div>
+                <div className="mt-4">
+                  <button
+                    onClick={() => {
+                      setSelectedViolation(violation);
+                      setShowUploadModal(true);
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm"
+                  >
+                    <UploadIcon className="h-4 w-4" />
+                    Upload Photos
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         ))}
       </div>
+
+      {/* Upload Modal */}
+      {showUploadModal && selectedViolation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold">Upload Photos</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  {selectedViolation.violation_type} - {selectedViolation.property_address}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowUploadModal(false);
+                  setSelectedViolation(null);
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-6">
+              <ViolationPhotoUpload
+                violationId={selectedViolation.id}
+                onUploadComplete={handleUploadComplete}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
