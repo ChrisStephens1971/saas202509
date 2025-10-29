@@ -4168,3 +4168,277 @@ class ViolationHearing(models.Model):
 
     def __str__(self):
         return f"Hearing for {self.violation} on {self.scheduled_date}"
+
+
+# ===========================
+# Board Packet Generation Models
+# ===========================
+
+class BoardPacketTemplate(models.Model):
+    """
+    Reusable templates for board packet generation.
+
+    Defines which sections to include and their order.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='packet_templates'
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Template name (e.g., 'Monthly Board Meeting')"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Template description"
+    )
+
+    sections = models.JSONField(
+        default=list,
+        help_text="List of sections to include: ['agenda', 'financials', 'ar_aging', etc.]"
+    )
+
+    section_order = models.JSONField(
+        default=list,
+        help_text="Order of sections in packet"
+    )
+
+    include_cover_page = models.BooleanField(
+        default=True,
+        help_text="Include auto-generated cover page"
+    )
+
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Default template for this tenant"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'board_packet_templates'
+        ordering = ['-is_default', 'name']
+
+    def __str__(self):
+        return f"{self.name} ({self.tenant.name})"
+
+
+class BoardPacket(models.Model):
+    """
+    Generated board packets with PDF.
+
+    Archives of generated packets for each board meeting.
+    """
+
+    # Status
+    STATUS_GENERATING = 'GENERATING'
+    STATUS_READY = 'READY'
+    STATUS_FAILED = 'FAILED'
+    STATUS_SENT = 'SENT'
+
+    STATUS_CHOICES = [
+        (STATUS_GENERATING, 'Generating'),
+        (STATUS_READY, 'Ready'),
+        (STATUS_FAILED, 'Failed'),
+        (STATUS_SENT, 'Sent'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='board_packets'
+    )
+
+    template = models.ForeignKey(
+        BoardPacketTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='packets'
+    )
+
+    title = models.CharField(
+        max_length=255,
+        help_text="Packet title (e.g., 'November 2025 Board Meeting')"
+    )
+
+    meeting_date = models.DateField(
+        help_text="Date of board meeting"
+    )
+
+    generated_date = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When packet was generated"
+    )
+
+    generated_by = models.CharField(
+        max_length=255,
+        help_text="User who generated the packet"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_GENERATING
+    )
+
+    pdf_url = models.URLField(
+        max_length=500,
+        blank=True,
+        help_text="URL to generated PDF (S3, CloudFlare, etc.)"
+    )
+
+    pdf_size_bytes = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="PDF file size in bytes"
+    )
+
+    page_count = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Number of pages in PDF"
+    )
+
+    generation_time_seconds = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Time taken to generate PDF"
+    )
+
+    sent_to = models.JSONField(
+        default=list,
+        help_text="List of email addresses packet was sent to"
+    )
+
+    sent_date = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When packet was emailed to board"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Notes about this packet"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'board_packets'
+        ordering = ['-meeting_date']
+        indexes = [
+            models.Index(fields=['tenant', '-meeting_date']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} - {self.meeting_date}"
+
+
+class PacketSection(models.Model):
+    """
+    Individual sections within a board packet.
+
+    Tracks which reports/documents are included.
+    """
+
+    # Section types
+    TYPE_COVER_PAGE = 'COVER_PAGE'
+    TYPE_AGENDA = 'AGENDA'
+    TYPE_MINUTES = 'MINUTES'
+    TYPE_FINANCIAL_SUMMARY = 'FINANCIAL_SUMMARY'
+    TYPE_TRIAL_BALANCE = 'TRIAL_BALANCE'
+    TYPE_CASH_FLOW = 'CASH_FLOW'
+    TYPE_AR_AGING = 'AR_AGING'
+    TYPE_DELINQUENCY_REPORT = 'DELINQUENCY_REPORT'
+    TYPE_VIOLATION_SUMMARY = 'VIOLATION_SUMMARY'
+    TYPE_RESERVE_SUMMARY = 'RESERVE_SUMMARY'
+    TYPE_BUDGET_VARIANCE = 'BUDGET_VARIANCE'
+    TYPE_CUSTOM_REPORT = 'CUSTOM_REPORT'
+    TYPE_ATTACHMENT = 'ATTACHMENT'
+
+    TYPE_CHOICES = [
+        (TYPE_COVER_PAGE, 'Cover Page'),
+        (TYPE_AGENDA, 'Meeting Agenda'),
+        (TYPE_MINUTES, 'Previous Minutes'),
+        (TYPE_FINANCIAL_SUMMARY, 'Financial Summary'),
+        (TYPE_TRIAL_BALANCE, 'Trial Balance'),
+        (TYPE_CASH_FLOW, 'Cash Flow Statement'),
+        (TYPE_AR_AGING, 'AR Aging Report'),
+        (TYPE_DELINQUENCY_REPORT, 'Delinquency Report'),
+        (TYPE_VIOLATION_SUMMARY, 'Violation Summary'),
+        (TYPE_RESERVE_SUMMARY, 'Reserve Study Summary'),
+        (TYPE_BUDGET_VARIANCE, 'Budget Variance'),
+        (TYPE_CUSTOM_REPORT, 'Custom Report'),
+        (TYPE_ATTACHMENT, 'Attachment'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    packet = models.ForeignKey(
+        BoardPacket,
+        on_delete=models.CASCADE,
+        related_name='sections'
+    )
+
+    section_type = models.CharField(
+        max_length=30,
+        choices=TYPE_CHOICES
+    )
+
+    title = models.CharField(
+        max_length=255,
+        help_text="Section title/heading"
+    )
+
+    order = models.IntegerField(
+        default=0,
+        help_text="Display order (lower numbers first)"
+    )
+
+    content_url = models.URLField(
+        max_length=500,
+        blank=True,
+        help_text="URL to section content (PDF, image, etc.)"
+    )
+
+    content_data = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Embedded content data (for reports generated inline)"
+    )
+
+    page_start = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Starting page number in final PDF"
+    )
+
+    page_end = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Ending page number in final PDF"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'packet_sections'
+        ordering = ['packet', 'order']
+        indexes = [
+            models.Index(fields=['packet', 'order']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.packet.title})"
