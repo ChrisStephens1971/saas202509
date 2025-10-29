@@ -22,7 +22,11 @@ from .models import (
     Account, Fund, JournalEntry, Owner, Unit, Invoice, Payment,
     PaymentApplication, Budget, BudgetLine, BankStatement, BankTransaction,
     ReconciliationRule, ReserveStudy, ReserveComponent, ReserveScenario,
-    CustomReport, ReportExecution
+    CustomReport, ReportExecution,
+    LateFeeRule, DelinquencyStatus, CollectionNotice, CollectionAction,
+    AutoMatchRule, MatchResult, MatchStatistics,
+    Violation, ViolationPhoto, ViolationNotice, ViolationHearing,
+    BoardPacketTemplate, BoardPacket, PacketSection
 )
 from .serializers import (
     AccountSerializer, FundSerializer, OwnerSerializer, UnitSerializer,
@@ -32,7 +36,13 @@ from .serializers import (
     BankStatementSerializer, BankTransactionSerializer, ReconciliationRuleSerializer,
     MatchSuggestionSerializer, ReconciliationReportSerializer,
     ReserveStudySerializer, ReserveComponentSerializer, ReserveScenarioSerializer,
-    FundingProjectionSerializer, CustomReportSerializer, ReportExecutionSerializer
+    FundingProjectionSerializer, CustomReportSerializer, ReportExecutionSerializer,
+    LateFeeRuleSerializer, DelinquencyStatusSerializer, CollectionNoticeSerializer,
+    CollectionActionSerializer,
+    AutoMatchRuleSerializer, MatchResultSerializer, MatchStatisticsSerializer,
+    ViolationSerializer, ViolationPhotoSerializer, ViolationNoticeSerializer,
+    ViolationHearingSerializer,
+    BoardPacketTemplateSerializer, BoardPacketSerializer, PacketSectionSerializer
 )
 
 
@@ -1800,3 +1810,350 @@ class ReportExecutionViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         tenant = get_tenant(self.request)
         return ReportExecution.objects.filter(report__tenant=tenant)
+
+
+# ===========================
+# Sprint 17: Delinquency & Collections ViewSets
+# ===========================
+
+class LateFeeRuleViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing late fee rules.
+    """
+    serializer_class = LateFeeRuleSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['fee_type', 'is_active', 'is_recurring']
+    ordering_fields = ['grace_period_days', 'created_at']
+    ordering = ['grace_period_days']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return LateFeeRule.objects.filter(tenant=tenant)
+
+    @action(detail=True, methods=['post'])
+    def calculate_fee(self, request, pk=None):
+        """Calculate late fee for a given balance."""
+        rule = self.get_object()
+        balance = Decimal(request.data.get('balance', '0'))
+        fee = rule.calculate_fee(balance)
+        return Response({'fee': str(fee)})
+
+
+class DelinquencyStatusViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing delinquency status tracking.
+    """
+    serializer_class = DelinquencyStatusSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['collection_stage', 'is_payment_plan']
+    ordering_fields = ['current_balance', 'days_delinquent', 'updated_at']
+    ordering = ['-current_balance']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return DelinquencyStatus.objects.filter(owner__tenant=tenant)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Get delinquency summary statistics."""
+        tenant = get_tenant(self.request)
+        queryset = self.get_queryset()
+
+        total_delinquent = queryset.count()
+        total_balance = queryset.aggregate(Sum('current_balance'))['current_balance__sum'] or Decimal('0')
+
+        by_stage = {}
+        for stage, _ in DelinquencyStatus.COLLECTION_STAGES:
+            count = queryset.filter(collection_stage=stage).count()
+            balance = queryset.filter(collection_stage=stage).aggregate(Sum('current_balance'))['current_balance__sum'] or Decimal('0')
+            by_stage[stage] = {'count': count, 'balance': str(balance)}
+
+        return Response({
+            'total_delinquent': total_delinquent,
+            'total_balance': str(total_balance),
+            'by_stage': by_stage
+        })
+
+
+class CollectionNoticeViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing collection notices.
+    """
+    serializer_class = CollectionNoticeSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['owner', 'notice_type', 'delivery_method', 'returned_undeliverable']
+    ordering_fields = ['sent_date', 'delivered_date']
+    ordering = ['-sent_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return CollectionNotice.objects.filter(owner__tenant=tenant)
+
+
+class CollectionActionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing collection actions requiring board approval.
+    """
+    serializer_class = CollectionActionSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['owner', 'action_type', 'status']
+    ordering_fields = ['requested_date', 'approved_date', 'balance_at_action']
+    ordering = ['-requested_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return CollectionAction.objects.filter(owner__tenant=tenant)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve a collection action."""
+        action = self.get_object()
+        action.status = 'approved'
+        action.approved_date = date.today()
+        action.approved_by = request.data.get('approved_by', '')
+        action.save()
+        serializer = self.get_serializer(action)
+        return Response(serializer.data)
+
+
+# ===========================
+# Sprint 18: Auto-Matching Engine ViewSets
+# ===========================
+
+class AutoMatchRuleViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing auto-match rules.
+    """
+    serializer_class = AutoMatchRuleSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['rule_type', 'is_active']
+    ordering_fields = ['confidence_score', 'accuracy_rate', 'times_used']
+    ordering = ['-accuracy_rate']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return AutoMatchRule.objects.filter(tenant=tenant)
+
+
+class MatchResultViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing match results.
+    """
+    serializer_class = MatchResultSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['bank_transaction', 'matched_entry', 'was_accepted']
+    ordering_fields = ['confidence_score', 'created_at']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return MatchResult.objects.filter(tenant=tenant)
+
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        """Accept a match suggestion."""
+        match = self.get_object()
+        match.was_accepted = True
+        match.save()
+
+        # Update rule accuracy
+        if match.matched_by_rule:
+            rule = match.matched_by_rule
+            rule.times_used += 1
+            rule.times_correct += 1
+            rule.accuracy_rate = (Decimal(rule.times_correct) / Decimal(rule.times_used)) * 100
+            rule.save()
+
+        serializer = self.get_serializer(match)
+        return Response(serializer.data)
+
+
+class MatchStatisticsViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for viewing match statistics.
+    """
+    serializer_class = MatchStatisticsSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['period_start', 'period_end']
+    ordering_fields = ['period_start', 'auto_match_rate']
+    ordering = ['-period_start']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return MatchStatistics.objects.filter(tenant=tenant)
+
+
+# ===========================
+# Sprint 19: Violation Tracking ViewSets
+# ===========================
+
+class ViolationViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing violations.
+    """
+    serializer_class = ViolationSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['owner', 'violation_type', 'severity', 'status', 'is_paid']
+    ordering_fields = ['reported_date', 'fine_amount', 'severity']
+    ordering = ['-reported_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return Violation.objects.filter(tenant=tenant)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Get violation summary statistics."""
+        queryset = self.get_queryset()
+
+        total_violations = queryset.count()
+        open_violations = queryset.filter(status__in=['reported', 'notice_sent', 'hearing_scheduled']).count()
+        total_fines = queryset.aggregate(Sum('fine_amount'))['fine_amount__sum'] or Decimal('0')
+        unpaid_fines = queryset.filter(is_paid=False).aggregate(Sum('fine_amount'))['fine_amount__sum'] or Decimal('0')
+
+        by_severity = {}
+        for severity, _ in Violation.SEVERITY_CHOICES:
+            count = queryset.filter(severity=severity).count()
+            by_severity[severity] = count
+
+        return Response({
+            'total_violations': total_violations,
+            'open_violations': open_violations,
+            'total_fines': str(total_fines),
+            'unpaid_fines': str(unpaid_fines),
+            'by_severity': by_severity
+        })
+
+
+class ViolationPhotoViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing violation photos.
+    """
+    serializer_class = ViolationPhotoSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['violation']
+    ordering_fields = ['taken_date', 'uploaded_at']
+    ordering = ['-taken_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ViolationPhoto.objects.filter(violation__tenant=tenant)
+
+
+class ViolationNoticeViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing violation notices.
+    """
+    serializer_class = ViolationNoticeSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['violation', 'notice_type', 'delivery_method']
+    ordering_fields = ['sent_date', 'delivered_date']
+    ordering = ['-sent_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ViolationNotice.objects.filter(violation__tenant=tenant)
+
+
+class ViolationHearingViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing violation hearings.
+    """
+    serializer_class = ViolationHearingSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['violation', 'outcome']
+    ordering_fields = ['scheduled_date', 'scheduled_time']
+    ordering = ['-scheduled_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ViolationHearing.objects.filter(violation__tenant=tenant)
+
+
+# ===========================
+# Sprint 20: Board Packet Generation ViewSets
+# ===========================
+
+class BoardPacketTemplateViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing board packet templates.
+    """
+    serializer_class = BoardPacketTemplateSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['is_default']
+    ordering_fields = ['name', 'created_at']
+    ordering = ['name']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return BoardPacketTemplate.objects.filter(tenant=tenant)
+
+
+class BoardPacketViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing board packets.
+    """
+    serializer_class = BoardPacketSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['template', 'status', 'meeting_date']
+    ordering_fields = ['meeting_date', 'generated_at']
+    ordering = ['-meeting_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return BoardPacket.objects.filter(tenant=tenant)
+
+    @action(detail=True, methods=['post'])
+    def generate_pdf(self, request, pk=None):
+        """Generate PDF for this board packet."""
+        packet = self.get_object()
+
+        # TODO: Implement PDF generation logic
+        # This would typically:
+        # 1. Gather all sections and their content
+        # 2. Render sections using a PDF library (e.g., ReportLab, WeasyPrint)
+        # 3. Upload PDF to storage (S3, etc.)
+        # 4. Update packet with PDF URL and status
+
+        packet.status = 'generating'
+        packet.save()
+
+        # Placeholder response
+        return Response({
+            'status': 'generating',
+            'message': 'PDF generation started. Check back shortly.'
+        })
+
+    @action(detail=True, methods=['post'])
+    def send_email(self, request, pk=None):
+        """Email board packet to recipients."""
+        packet = self.get_object()
+        recipients = request.data.get('recipients', [])
+
+        # TODO: Implement email sending logic
+        # This would typically:
+        # 1. Ensure PDF is generated
+        # 2. Send email with PDF attachment or link
+        # 3. Update packet with sent_to and sent_at
+
+        packet.sent_to = recipients
+        packet.sent_at = timezone.now()
+        packet.save()
+
+        serializer = self.get_serializer(packet)
+        return Response(serializer.data)
+
+
+class PacketSectionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing packet sections.
+    """
+    serializer_class = PacketSectionSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['packet', 'section_type']
+    ordering_fields = ['order', 'created_at']
+    ordering = ['order']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return PacketSection.objects.filter(packet__tenant=tenant)

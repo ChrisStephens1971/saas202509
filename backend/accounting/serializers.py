@@ -10,7 +10,10 @@ from .models import (
     Budget, BudgetLine, BankStatement, BankTransaction, ReconciliationRule,
     ReserveStudy, ReserveComponent, ReserveScenario,
     CustomReport, ReportExecution,
-    LateFeeRule, DelinquencyStatus, CollectionNotice, CollectionAction
+    LateFeeRule, DelinquencyStatus, CollectionNotice, CollectionAction,
+    AutoMatchRule, MatchResult, MatchStatistics,
+    Violation, ViolationPhoto, ViolationNotice, ViolationHearing,
+    BoardPacketTemplate, BoardPacket, PacketSection
 )
 
 
@@ -529,5 +532,175 @@ class CollectionActionSerializer(serializers.ModelSerializer):
             'status', 'status_display', 'requested_date', 'approved_date',
             'approved_by', 'completed_date', 'balance_at_action',
             'attorney_name', 'case_number', 'notes', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+# ===========================
+# Auto-Matching Engine Serializers
+# ===========================
+
+class AutoMatchRuleSerializer(serializers.ModelSerializer):
+    """Serializer for AutoMatchRule model."""
+    rule_type_display = serializers.CharField(source='get_rule_type_display', read_only=True)
+
+    class Meta:
+        model = AutoMatchRule
+        fields = [
+            'id', 'tenant', 'rule_type', 'rule_type_display', 'pattern',
+            'confidence_score', 'times_used', 'times_correct',
+            'accuracy_rate', 'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'times_used', 'times_correct', 'accuracy_rate', 'created_at', 'updated_at']
+
+
+class MatchResultSerializer(serializers.ModelSerializer):
+    """Serializer for MatchResult model."""
+    bank_transaction_description = serializers.CharField(source='bank_transaction.description', read_only=True)
+    matched_entry_reference = serializers.CharField(source='matched_entry.reference', read_only=True)
+
+    class Meta:
+        model = MatchResult
+        fields = [
+            'id', 'tenant', 'bank_transaction', 'bank_transaction_description',
+            'matched_entry', 'matched_entry_reference', 'confidence_score',
+            'match_explanation', 'matched_by_rule', 'was_accepted',
+            'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class MatchStatisticsSerializer(serializers.ModelSerializer):
+    """Serializer for MatchStatistics model."""
+
+    class Meta:
+        model = MatchStatistics
+        fields = [
+            'id', 'tenant', 'period_start', 'period_end',
+            'total_transactions', 'auto_matched', 'manually_matched',
+            'unmatched', 'auto_match_rate', 'average_confidence',
+            'false_positive_rate', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+# ===========================
+# Violation Tracking Serializers
+# ===========================
+
+class ViolationPhotoSerializer(serializers.ModelSerializer):
+    """Serializer for ViolationPhoto model."""
+
+    class Meta:
+        model = ViolationPhoto
+        fields = [
+            'id', 'violation', 'photo_url', 'caption',
+            'taken_date', 'uploaded_at'
+        ]
+        read_only_fields = ['id', 'uploaded_at']
+
+
+class ViolationNoticeSerializer(serializers.ModelSerializer):
+    """Serializer for ViolationNotice model."""
+    notice_type_display = serializers.CharField(source='get_notice_type_display', read_only=True)
+    method_display = serializers.CharField(source='get_delivery_method_display', read_only=True)
+
+    class Meta:
+        model = ViolationNotice
+        fields = [
+            'id', 'violation', 'notice_type', 'notice_type_display',
+            'delivery_method', 'method_display', 'sent_date',
+            'tracking_number', 'delivered_date', 'cure_deadline',
+            'notes', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class ViolationHearingSerializer(serializers.ModelSerializer):
+    """Serializer for ViolationHearing model."""
+    outcome_display = serializers.CharField(source='get_outcome_display', read_only=True)
+
+    class Meta:
+        model = ViolationHearing
+        fields = [
+            'id', 'violation', 'scheduled_date', 'scheduled_time',
+            'location', 'attendees', 'outcome', 'outcome_display',
+            'fine_assessed', 'compliance_deadline', 'hearing_notes',
+            'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class ViolationSerializer(serializers.ModelSerializer):
+    """Serializer for Violation model."""
+    owner_name = serializers.CharField(source='owner.full_name', read_only=True)
+    property_address = serializers.CharField(source='owner.property_address', read_only=True)
+    severity_display = serializers.CharField(source='get_severity_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    photos = ViolationPhotoSerializer(many=True, read_only=True, source='violationphoto_set')
+    notices = ViolationNoticeSerializer(many=True, read_only=True, source='violationnotice_set')
+    hearings = ViolationHearingSerializer(many=True, read_only=True, source='violationhearing_set')
+
+    class Meta:
+        model = Violation
+        fields = [
+            'id', 'tenant', 'owner', 'owner_name', 'property_address',
+            'violation_type', 'severity', 'severity_display',
+            'status', 'status_display', 'reported_date',
+            'first_notice_date', 'compliance_date', 'fine_amount',
+            'is_paid', 'description', 'resolution_notes',
+            'photos', 'notices', 'hearings',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+# ===========================
+# Board Packet Generation Serializers
+# ===========================
+
+class PacketSectionSerializer(serializers.ModelSerializer):
+    """Serializer for PacketSection model."""
+    section_type_display = serializers.CharField(source='get_section_type_display', read_only=True)
+
+    class Meta:
+        model = PacketSection
+        fields = [
+            'id', 'packet', 'section_type', 'section_type_display',
+            'title', 'content_url', 'content_data', 'order',
+            'page_count', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class BoardPacketSerializer(serializers.ModelSerializer):
+    """Serializer for BoardPacket model."""
+    template_name = serializers.CharField(source='template.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    sections = PacketSectionSerializer(many=True, read_only=True, source='packetsection_set')
+
+    class Meta:
+        model = BoardPacket
+        fields = [
+            'id', 'tenant', 'template', 'template_name',
+            'meeting_date', 'status', 'status_display',
+            'pdf_url', 'page_count', 'generated_at',
+            'generated_by', 'sent_to', 'sent_at',
+            'sections', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'generated_at', 'created_at', 'updated_at']
+
+
+class BoardPacketTemplateSerializer(serializers.ModelSerializer):
+    """Serializer for BoardPacketTemplate model."""
+
+    class Meta:
+        model = BoardPacketTemplate
+        fields = [
+            'id', 'tenant', 'name', 'description',
+            'sections', 'section_order',
+            'include_cover_page', 'cover_page_template',
+            'header_text', 'footer_text',
+            'is_default', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

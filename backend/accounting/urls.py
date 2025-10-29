@@ -9,6 +9,10 @@ from .api_views import (
     BudgetViewSet, BudgetLineViewSet, DashboardViewSet, BankReconciliationViewSet,
     FundViewSet, ReserveStudyViewSet, ReserveComponentViewSet, ReserveScenarioViewSet,
     CustomReportViewSet, ReportExecutionViewSet,
+    LateFeeRuleViewSet, DelinquencyStatusViewSet, CollectionNoticeViewSet, CollectionActionViewSet,
+    AutoMatchRuleViewSet, MatchResultViewSet, MatchStatisticsViewSet,
+    ViolationViewSet, ViolationPhotoViewSet, ViolationNoticeViewSet, ViolationHearingViewSet,
+    BoardPacketTemplateViewSet, BoardPacketViewSet, PacketSectionViewSet,
     ar_aging_report, owner_ledger, dashboard_metrics, trial_balance
 )
 
@@ -28,6 +32,28 @@ router.register(r'reserve-components', ReserveComponentViewSet, basename='reserv
 router.register(r'reserve-scenarios', ReserveScenarioViewSet, basename='reserve-scenario')
 router.register(r'custom-reports', CustomReportViewSet, basename='custom-report')
 router.register(r'report-executions', ReportExecutionViewSet, basename='report-execution')
+
+# Sprint 17: Delinquency & Collections
+router.register(r'late-fee-rules', LateFeeRuleViewSet, basename='late-fee-rule')
+router.register(r'delinquency-status', DelinquencyStatusViewSet, basename='delinquency-status')
+router.register(r'collection-notices', CollectionNoticeViewSet, basename='collection-notice')
+router.register(r'collection-actions', CollectionActionViewSet, basename='collection-action')
+
+# Sprint 18: Auto-Matching Engine
+router.register(r'auto-match-rules', AutoMatchRuleViewSet, basename='auto-match-rule')
+router.register(r'match-results', MatchResultViewSet, basename='match-result')
+router.register(r'match-statistics', MatchStatisticsViewSet, basename='match-statistics')
+
+# Sprint 19: Violation Tracking
+router.register(r'violations', ViolationViewSet, basename='violation')
+router.register(r'violation-photos', ViolationPhotoViewSet, basename='violation-photo')
+router.register(r'violation-notices', ViolationNoticeViewSet, basename='violation-notice')
+router.register(r'violation-hearings', ViolationHearingViewSet, basename='violation-hearing')
+
+# Sprint 20: Board Packet Generation
+router.register(r'board-packet-templates', BoardPacketTemplateViewSet, basename='board-packet-template')
+router.register(r'board-packets', BoardPacketViewSet, basename='board-packet')
+router.register(r'packet-sections', PacketSectionViewSet, basename='packet-section')
 
 # URL patterns
 urlpatterns = [
