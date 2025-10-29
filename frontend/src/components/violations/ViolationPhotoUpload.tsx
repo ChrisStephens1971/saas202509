@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react'
-import { Upload, X, Image as ImageIcon, CheckCircle, AlertCircle } from 'lucide-react'
+import { Upload, X, CheckCircle, AlertCircle } from 'lucide-react'
 
 interface ViolationPhotoUploadProps {
   violationId: string

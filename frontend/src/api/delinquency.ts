@@ -2,7 +2,7 @@
  * API client for delinquency and collections management
  */
 
-import apiClient from './apiClient';
+import apiClient from './client';
 
 // ===========================
 // Types

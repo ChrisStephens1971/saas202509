@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { TrendingUp, Target, AlertTriangle } from 'lucide-react';
-import { getMatchStatistics, MatchStatistics } from '../api/matching';
+import { getMatchStatistics, type MatchStatistics } from '../api/matching';
 
 export default function MatchStatisticsPage() {
   const [stats, setStats] = useState<MatchStatistics[]>([]);

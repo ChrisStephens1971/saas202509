@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { reserveStudiesApi, ReserveStudy } from '../api/reserves';
+import { reserveStudiesApi, type ReserveStudy } from '../api/reserves';
 
 const ReserveStudiesPage: React.FC = () => {
   const [studies, setStudies] = useState<ReserveStudy[]>([]);

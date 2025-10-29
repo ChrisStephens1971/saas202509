@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { Scale, Check } from 'lucide-react';
-import { getCollectionActions, approveCollectionAction, CollectionAction } from '../api/delinquency';
+import { getCollectionActions, approveCollectionAction, type CollectionAction } from '../api/delinquency';
 
 export default function CollectionActionsPage() {
   const [actions, setActions] = useState<CollectionAction[]>([]);

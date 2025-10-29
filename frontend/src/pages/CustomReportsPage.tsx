@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { customReportsApi, CustomReport } from '../api/reports';
+import { customReportsApi, type CustomReport } from '../api/reports';
 
 const CustomReportsPage: React.FC = () => {
   const [reports, setReports] = useState<CustomReport[]>([]);

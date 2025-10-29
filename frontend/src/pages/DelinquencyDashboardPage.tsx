@@ -8,14 +8,14 @@ import { useState, useEffect } from 'react';
 import { AlertCircle, TrendingUp, DollarSign, Users, Clock } from 'lucide-react';
 import {
   getDelinquencyStatuses,
-  getDelinquencySummary,
-  DelinquencyStatus,
-  DelinquencySummary
+  gettype DelinquencySummary,
+  type DelinquencyStatus,
+  type DelinquencySummary
 } from '../api/delinquency';
 
 export default function DelinquencyDashboardPage() {
   const [statuses, setStatuses] = useState<DelinquencyStatus[]>([]);
-  const [summary, setSummary] = useState<DelinquencySummary | null>(null);
+  const [summary, setSummary] = useState<type DelinquencySummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState<string>('all');
@@ -29,7 +29,7 @@ export default function DelinquencyDashboardPage() {
       setLoading(true);
       const [statusesData, summaryData] = await Promise.all([
         getDelinquencyStatuses(),
-        getDelinquencySummary()
+        gettype DelinquencySummary()
       ]);
       setStatuses(statusesData);
       setSummary(summaryData);

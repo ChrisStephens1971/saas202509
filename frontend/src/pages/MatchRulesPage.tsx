@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { Brain } from 'lucide-react';
-import { getMatchRules, AutoMatchRule } from '../api/matching';
+import { getMatchRules, type AutoMatchRule } from '../api/matching';
 
 export default function MatchRulesPage() {
   const [rules, setRules] = useState<AutoMatchRule[]>([]);

@@ -2,7 +2,7 @@
  * API client for auto-matching engine
  */
 
-import apiClient from './apiClient';
+import apiClient from './client';
 
 export interface AutoMatchRule {
   id: string;

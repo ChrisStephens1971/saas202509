@@ -2,7 +2,7 @@
  * API client for violation tracking
  */
 
-import apiClient from './apiClient';
+import apiClient from './client';
 
 export interface Violation {
   id: string;

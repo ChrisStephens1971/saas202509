@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { FileText, Plus, Download, Send } from 'lucide-react';
-import { getBoardPackets, generatePDF, sendEmail, BoardPacket } from '../api/boardPackets';
+import { getBoardPackets, generatePDF, sendEmail, type BoardPacket } from '../api/boardPackets';
 
 export default function BoardPacketsPage() {
   const [packets, setPackets] = useState<BoardPacket[]>([]);

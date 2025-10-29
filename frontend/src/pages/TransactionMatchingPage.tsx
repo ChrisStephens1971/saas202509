@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { Check, X, Zap } from 'lucide-react';
-import { getMatchResults, acceptMatch, MatchResult } from '../api/matching';
+import { getMatchResults, acceptMatch, type MatchResult } from '../api/matching';
 
 export default function TransactionMatchingPage() {
   const [matches, setMatches] = useState<MatchResult[]>([]);

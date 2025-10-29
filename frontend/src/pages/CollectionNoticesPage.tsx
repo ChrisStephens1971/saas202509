@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { Mail, AlertCircle } from 'lucide-react';
-import { getCollectionNotices, CollectionNotice } from '../api/delinquency';
+import { getCollectionNotices, type CollectionNotice } from '../api/delinquency';
 
 export default function CollectionNoticesPage() {
   const [notices, setNotices] = useState<CollectionNotice[]>([]);

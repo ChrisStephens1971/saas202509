@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { AlertOctagon, Camera, Plus, X, Upload as UploadIcon } from 'lucide-react';
-import { getViolations, Violation } from '../api/violations';
+import { getViolations, type Violation } from '../api/violations';
 import ViolationPhotoUpload from '../components/violations/ViolationPhotoUpload';
 
 export default function ViolationsPage() {

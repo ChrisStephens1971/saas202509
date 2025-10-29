@@ -2,7 +2,7 @@
  * API client for board packet generation
  */
 
-import apiClient from './apiClient';
+import apiClient from './client';
 
 export interface BoardPacket {
   id: string;
