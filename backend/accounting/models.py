@@ -2606,3 +2606,355 @@ class ReconciliationRule(models.Model):
             return False
 
         return True
+
+
+# ===========================
+# Reserve Planning Models
+# ===========================
+
+class ReserveStudy(models.Model):
+    """
+    Reserve study for capital expenditure forecasting over 5-30 years.
+
+    A reserve study identifies major components (roof, paving, etc.),
+    estimates their replacement costs, and creates a funding plan.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='reserve_studies'
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Study name (e.g., '2025 Reserve Study')"
+    )
+
+    study_date = models.DateField(
+        default=date.today,
+        help_text="Date the study was prepared"
+    )
+
+    horizon_years = models.IntegerField(
+        default=20,
+        validators=[MinValueValidator(5)],
+        help_text="Planning horizon in years (typically 5-30)"
+    )
+
+    inflation_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('3.50'),
+        validators=[MinValueValidator(0)],
+        help_text="Annual inflation rate as percentage (e.g., 3.50 for 3.5%)"
+    )
+
+    interest_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('1.50'),
+        validators=[MinValueValidator(0)],
+        help_text="Expected interest rate on reserve funds (e.g., 1.50 for 1.5%)"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Study notes or methodology"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reserve_studies'
+        ordering = ['-study_date', 'name']
+        indexes = [
+            models.Index(fields=['tenant', '-study_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.study_date.year})"
+
+    def get_current_reserve_balance(self):
+        """Get current balance from reserve fund"""
+        try:
+            reserve_fund = self.tenant.funds.get(fund_type=Fund.TYPE_RESERVE)
+            # Calculate balance from journal entries
+            from django.db.models import Sum, Q
+            balance = JournalEntryLine.objects.filter(
+                journal_entry__fund=reserve_fund
+            ).aggregate(
+                total=Sum('amount')
+            )['total'] or Decimal('0.00')
+            return balance
+        except Fund.DoesNotExist:
+            return Decimal('0.00')
+
+
+class ReserveComponent(models.Model):
+    """
+    Individual component in a reserve study (roof, pavement, pool equipment, etc.).
+
+    Each component has a useful life, remaining life, and replacement cost.
+    """
+
+    # Component categories
+    CATEGORY_ROOFING = 'ROOFING'
+    CATEGORY_PAVING = 'PAVING'
+    CATEGORY_PAINTING = 'PAINTING'
+    CATEGORY_STRUCTURAL = 'STRUCTURAL'
+    CATEGORY_HVAC = 'HVAC'
+    CATEGORY_PLUMBING = 'PLUMBING'
+    CATEGORY_ELECTRICAL = 'ELECTRICAL'
+    CATEGORY_POOL = 'POOL'
+    CATEGORY_LANDSCAPE = 'LANDSCAPE'
+    CATEGORY_OTHER = 'OTHER'
+
+    CATEGORY_CHOICES = [
+        (CATEGORY_ROOFING, 'Roofing'),
+        (CATEGORY_PAVING, 'Paving / Asphalt'),
+        (CATEGORY_PAINTING, 'Painting / Coatings'),
+        (CATEGORY_STRUCTURAL, 'Structural / Building'),
+        (CATEGORY_HVAC, 'HVAC'),
+        (CATEGORY_PLUMBING, 'Plumbing'),
+        (CATEGORY_ELECTRICAL, 'Electrical'),
+        (CATEGORY_POOL, 'Pool / Spa'),
+        (CATEGORY_LANDSCAPE, 'Landscaping'),
+        (CATEGORY_OTHER, 'Other'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    study = models.ForeignKey(
+        ReserveStudy,
+        on_delete=models.CASCADE,
+        related_name='components'
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Component name (e.g., 'Asphalt Parking Lot - Section A')"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Detailed description and location"
+    )
+
+    category = models.CharField(
+        max_length=30,
+        choices=CATEGORY_CHOICES,
+        default=CATEGORY_OTHER
+    )
+
+    quantity = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Quantity (e.g., square footage, linear feet, unit count)"
+    )
+
+    unit = models.CharField(
+        max_length=50,
+        help_text="Unit of measurement (e.g., 'sq ft', 'linear ft', 'units')"
+    )
+
+    useful_life_years = models.IntegerField(
+        validators=[MinValueValidator(1)],
+        help_text="Total useful life in years (e.g., roof = 20 years)"
+    )
+
+    remaining_life_years = models.IntegerField(
+        validators=[MinValueValidator(0)],
+        help_text="Remaining life from study date (e.g., 8 years left)"
+    )
+
+    current_cost = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+        help_text="Replacement cost in today's dollars"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reserve_components'
+        ordering = ['category', 'name']
+        indexes = [
+            models.Index(fields=['study', 'category']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.remaining_life_years} years remaining)"
+
+    def clean(self):
+        """Validate that remaining life <= useful life"""
+        if self.remaining_life_years > self.useful_life_years:
+            raise ValidationError(
+                "Remaining life cannot exceed useful life"
+            )
+
+    def get_replacement_year(self):
+        """Calculate the year this component needs replacement"""
+        return self.study.study_date.year + self.remaining_life_years
+
+    def get_inflated_cost(self):
+        """Calculate future cost with inflation"""
+        inflation_rate = self.study.inflation_rate / Decimal('100.0')
+        years = self.remaining_life_years
+        future_value = self.current_cost * (
+            (Decimal('1.0') + inflation_rate) ** years
+        )
+        return future_value.quantize(Decimal('0.01'))
+
+
+class ReserveScenario(models.Model):
+    """
+    Funding scenario for a reserve study (baseline, aggressive, minimal, etc.).
+
+    Each scenario has different contribution amounts and produces different
+    funding projections.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    study = models.ForeignKey(
+        ReserveStudy,
+        on_delete=models.CASCADE,
+        related_name='scenarios'
+    )
+
+    name = models.CharField(
+        max_length=255,
+        help_text="Scenario name (e.g., 'Baseline', 'Aggressive Funding')"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Description of this scenario"
+    )
+
+    monthly_contribution = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+        help_text="Monthly contribution to reserve fund"
+    )
+
+    one_time_contribution = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="One-time special assessment (optional)"
+    )
+
+    contribution_increase_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="Annual % increase in contributions (e.g., 2.0 for 2%)"
+    )
+
+    is_baseline = models.BooleanField(
+        default=False,
+        help_text="Whether this is the recommended baseline scenario"
+    )
+
+    notes = models.TextField(
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reserve_scenarios'
+        ordering = ['-is_baseline', 'name']
+        indexes = [
+            models.Index(fields=['study', '-is_baseline']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} (${self.monthly_contribution}/mo)"
+
+    def calculate_projection(self):
+        """
+        Calculate multi-year funding projection for this scenario.
+
+        Returns list of year-by-year projections showing:
+        - Beginning balance
+        - Contributions
+        - Expenditures
+        - Interest earned
+        - Ending balance
+        - Percent funded
+        """
+        projections = []
+        current_balance = self.study.get_current_reserve_balance()
+
+        # Get all components and their replacement years
+        components = list(self.study.components.all())
+        expenditures_by_year = {}
+        for component in components:
+            year = component.get_replacement_year()
+            if year not in expenditures_by_year:
+                expenditures_by_year[year] = Decimal('0.00')
+            expenditures_by_year[year] += component.get_inflated_cost()
+
+        # Calculate ideal fully funded balance
+        total_future_cost = sum(
+            comp.get_inflated_cost() for comp in components
+        )
+
+        # Project each year
+        current_monthly = self.monthly_contribution
+        increase_rate = self.contribution_increase_rate / Decimal('100.0')
+        interest_rate = self.study.interest_rate / Decimal('100.0')
+
+        for year_offset in range(self.study.horizon_years + 1):
+            year = self.study.study_date.year + year_offset
+
+            beginning_balance = current_balance
+
+            # Add one-time contribution in first year
+            contributions = current_monthly * 12
+            if year_offset == 0:
+                contributions += self.one_time_contribution
+
+            # Subtract expenditures for this year
+            expenditures = expenditures_by_year.get(year, Decimal('0.00'))
+
+            # Calculate interest on average balance
+            average_balance = beginning_balance + (contributions / 2) - (expenditures / 2)
+            interest_earned = (average_balance * interest_rate).quantize(Decimal('0.01'))
+
+            # Calculate ending balance
+            ending_balance = beginning_balance + contributions - expenditures + interest_earned
+
+            # Calculate percent funded
+            if total_future_cost > 0:
+                percent_funded = (ending_balance / total_future_cost * 100).quantize(Decimal('0.01'))
+            else:
+                percent_funded = Decimal('100.00')
+
+            projections.append({
+                'year': year,
+                'beginning_balance': beginning_balance,
+                'contributions': contributions,
+                'expenditures': expenditures,
+                'interest_earned': interest_earned,
+                'ending_balance': ending_balance,
+                'percent_funded': percent_funded,
+            })
+
+            # Update for next year
+            current_balance = ending_balance
+            current_monthly = current_monthly * (Decimal('1.0') + increase_rate)
+
+        return projections

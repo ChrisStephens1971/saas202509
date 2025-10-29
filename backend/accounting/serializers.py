@@ -7,7 +7,8 @@ from decimal import Decimal
 from .models import (
     Account, Fund, JournalEntry, JournalEntryLine,
     Owner, Unit, Ownership, Invoice, InvoiceLine, Payment, PaymentApplication,
-    Budget, BudgetLine, BankStatement, BankTransaction, ReconciliationRule
+    Budget, BudgetLine, BankStatement, BankTransaction, ReconciliationRule,
+    ReserveStudy, ReserveComponent, ReserveScenario
 )
 
 
@@ -351,3 +352,74 @@ class ReconciliationReportSerializer(serializers.Serializer):
     unmatched_count = serializers.IntegerField()
     ignored_count = serializers.IntegerField()
     transactions = BankTransactionSerializer(many=True, read_only=True)
+
+
+# ===========================
+# Reserve Planning Serializers
+# ===========================
+
+class ReserveComponentSerializer(serializers.ModelSerializer):
+    """Serializer for ReserveComponent model."""
+    inflated_cost = serializers.SerializerMethodField()
+    replacement_year = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReserveComponent
+        fields = [
+            'id', 'study', 'name', 'description', 'category',
+            'quantity', 'unit', 'useful_life_years', 'remaining_life_years',
+            'current_cost', 'inflated_cost', 'replacement_year',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_inflated_cost(self, obj):
+        return str(obj.get_inflated_cost())
+
+    def get_replacement_year(self, obj):
+        return obj.get_replacement_year()
+
+
+class ReserveScenarioSerializer(serializers.ModelSerializer):
+    """Serializer for ReserveScenario model."""
+
+    class Meta:
+        model = ReserveScenario
+        fields = [
+            'id', 'study', 'name', 'description',
+            'monthly_contribution', 'one_time_contribution',
+            'contribution_increase_rate', 'is_baseline', 'notes',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ReserveStudySerializer(serializers.ModelSerializer):
+    """Serializer for ReserveStudy model."""
+    components = ReserveComponentSerializer(many=True, read_only=True)
+    scenarios = ReserveScenarioSerializer(many=True, read_only=True)
+    current_reserve_balance = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReserveStudy
+        fields = [
+            'id', 'name', 'study_date', 'horizon_years',
+            'inflation_rate', 'interest_rate', 'notes',
+            'components', 'scenarios', 'current_reserve_balance',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_current_reserve_balance(self, obj):
+        return str(obj.get_current_reserve_balance())
+
+
+class FundingProjectionSerializer(serializers.Serializer):
+    """Serializer for funding projections."""
+    year = serializers.IntegerField()
+    beginning_balance = serializers.DecimalField(max_digits=15, decimal_places=2)
+    contributions = serializers.DecimalField(max_digits=15, decimal_places=2)
+    expenditures = serializers.DecimalField(max_digits=15, decimal_places=2)
+    interest_earned = serializers.DecimalField(max_digits=15, decimal_places=2)
+    ending_balance = serializers.DecimalField(max_digits=15, decimal_places=2)
+    percent_funded = serializers.DecimalField(max_digits=5, decimal_places=2)

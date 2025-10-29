@@ -7,7 +7,7 @@ from rest_framework.routers import DefaultRouter
 from .api_views import (
     AccountViewSet, OwnerViewSet, InvoiceViewSet, PaymentViewSet,
     BudgetViewSet, BudgetLineViewSet, DashboardViewSet, BankReconciliationViewSet,
-    FundViewSet,
+    FundViewSet, ReserveStudyViewSet, ReserveComponentViewSet, ReserveScenarioViewSet,
     ar_aging_report, owner_ledger, dashboard_metrics, trial_balance
 )
 
@@ -22,6 +22,9 @@ router.register(r'budget-lines', BudgetLineViewSet, basename='budget-line')
 router.register(r'dashboard', DashboardViewSet, basename='dashboard')
 router.register(r'reconciliation', BankReconciliationViewSet, basename='reconciliation')
 router.register(r'funds', FundViewSet, basename='fund')
+router.register(r'reserve-studies', ReserveStudyViewSet, basename='reserve-study')
+router.register(r'reserve-components', ReserveComponentViewSet, basename='reserve-component')
+router.register(r'reserve-scenarios', ReserveScenarioViewSet, basename='reserve-scenario')
 
 # URL patterns
 urlpatterns = [

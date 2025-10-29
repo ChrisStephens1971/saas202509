@@ -21,7 +21,7 @@ from tenants.models import Tenant
 from .models import (
     Account, Fund, JournalEntry, Owner, Unit, Invoice, Payment,
     PaymentApplication, Budget, BudgetLine, BankStatement, BankTransaction,
-    ReconciliationRule
+    ReconciliationRule, ReserveStudy, ReserveComponent, ReserveScenario
 )
 from .serializers import (
     AccountSerializer, FundSerializer, OwnerSerializer, UnitSerializer,
@@ -29,7 +29,9 @@ from .serializers import (
     ARAgingSerializer, OwnerLedgerTransactionSerializer, DashboardMetricsSerializer,
     BudgetSerializer, BudgetLineSerializer, BudgetCreateSerializer,
     BankStatementSerializer, BankTransactionSerializer, ReconciliationRuleSerializer,
-    MatchSuggestionSerializer, ReconciliationReportSerializer
+    MatchSuggestionSerializer, ReconciliationReportSerializer,
+    ReserveStudySerializer, ReserveComponentSerializer, ReserveScenarioSerializer,
+    FundingProjectionSerializer
 )
 
 
@@ -1465,7 +1467,7 @@ class FundViewSet(viewsets.ModelViewSet):
     ViewSet for managing Funds.
     """
     serializer_class = FundSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
     filterset_fields = ['fund_type', 'is_active']
     search_fields = ['name', 'description']
     ordering_fields = ['name', 'fund_type', 'created_at']
@@ -1478,3 +1480,159 @@ class FundViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         tenant = get_tenant(self.request)
         serializer.save(tenant=tenant)
+
+
+# ===========================
+# Reserve Planning ViewSets
+# ===========================
+
+class ReserveStudyViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Reserve Studies.
+
+    Provides CRUD operations plus funding adequacy calculations.
+    """
+    serializer_class = ReserveStudySerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['study_date']
+    search_fields = ['name', 'notes']
+    ordering_fields = ['name', 'study_date', 'created_at']
+    ordering = ['-study_date', 'name']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ReserveStudy.objects.filter(tenant=tenant).prefetch_related('components', 'scenarios')
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(tenant=tenant)
+
+    @action(detail=True, methods=['get'])
+    def funding_adequacy(self, request, pk=None):
+        """
+        Calculate funding adequacy (% funded) for this study.
+
+        Returns:
+        - current_balance: Current reserve fund balance
+        - total_future_cost: Sum of all inflated replacement costs
+        - percent_funded: (balance / cost) * 100
+        - status: WELL_FUNDED (>70%), ADEQUATE (30-70%), UNDERFUNDED (<30%)
+        """
+        study = self.get_object()
+        current_balance = study.get_current_reserve_balance()
+
+        # Calculate total future cost (sum of inflated costs)
+        components = study.components.all()
+        total_future_cost = sum(comp.get_inflated_cost() for comp in components)
+
+        if total_future_cost > 0:
+            percent_funded = (current_balance / total_future_cost * 100).quantize(Decimal('0.01'))
+        else:
+            percent_funded = Decimal('100.00')
+
+        # Determine status
+        if percent_funded >= 70:
+            status = 'WELL_FUNDED'
+        elif percent_funded >= 30:
+            status = 'ADEQUATE'
+        else:
+            status = 'UNDERFUNDED'
+
+        return Response({
+            'current_balance': str(current_balance),
+            'total_future_cost': str(total_future_cost),
+            'percent_funded': str(percent_funded),
+            'status': status
+        })
+
+
+class ReserveComponentViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Reserve Components.
+
+    Components belong to a reserve study.
+    """
+    serializer_class = ReserveComponentSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['study', 'category']
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'category', 'remaining_life_years', 'current_cost']
+    ordering = ['category', 'name']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ReserveComponent.objects.filter(study__tenant=tenant)
+
+
+class ReserveScenarioViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Reserve Scenarios.
+
+    Scenarios belong to a reserve study and provide different funding options.
+    """
+    serializer_class = ReserveScenarioSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['study', 'is_baseline']
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'monthly_contribution', 'created_at']
+    ordering = ['-is_baseline', 'name']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ReserveScenario.objects.filter(study__tenant=tenant)
+
+    @action(detail=True, methods=['get'])
+    def projection(self, request, pk=None):
+        """
+        Calculate multi-year funding projection for this scenario.
+
+        Returns year-by-year projections showing:
+        - Beginning balance
+        - Contributions
+        - Expenditures
+        - Interest earned
+        - Ending balance
+        - Percent funded
+        """
+        scenario = self.get_object()
+        projections = scenario.calculate_projection()
+        serializer = FundingProjectionSerializer(projections, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def compare(self, request):
+        """
+        Compare multiple scenarios side-by-side.
+
+        POST body: {"scenario_ids": ["uuid1", "uuid2", "uuid3"]}
+
+        Returns projections for all scenarios for easy comparison.
+        """
+        scenario_ids = request.data.get('scenario_ids', [])
+        if not scenario_ids or not isinstance(scenario_ids, list):
+            return Response(
+                {"error": "scenario_ids array required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        tenant = get_tenant(request)
+        scenarios = ReserveScenario.objects.filter(
+            id__in=scenario_ids,
+            study__tenant=tenant
+        )
+
+        if len(scenarios) != len(scenario_ids):
+            return Response(
+                {"error": "One or more scenarios not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        comparison = []
+        for scenario in scenarios:
+            projections = scenario.calculate_projection()
+            comparison.append({
+                'scenario': ReserveScenarioSerializer(scenario).data,
+                'projections': FundingProjectionSerializer(projections, many=True).data
+            })
+
+        return Response(comparison)
