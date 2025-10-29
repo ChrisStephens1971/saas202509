@@ -3835,3 +3835,336 @@ class MatchStatistics(models.Model):
 
     def __str__(self):
         return f"{self.tenant.name} - {self.date} ({self.auto_match_rate}% auto-matched)"
+
+
+# ===========================
+# Violation Tracking Models
+# ===========================
+
+class Violation(models.Model):
+    """
+    HOA violation tracking with photo evidence.
+
+    Tracks violations from report to resolution.
+    """
+
+    # Violation statuses
+    STATUS_REPORTED = 'REPORTED'
+    STATUS_NOTICE_SENT = 'NOTICE_SENT'
+    STATUS_PENDING_CURE = 'PENDING_CURE'
+    STATUS_CURED = 'CURED'
+    STATUS_HEARING_SCHEDULED = 'HEARING_SCHEDULED'
+    STATUS_FINED = 'FINED'
+    STATUS_CLOSED = 'CLOSED'
+
+    STATUS_CHOICES = [
+        (STATUS_REPORTED, 'Reported'),
+        (STATUS_NOTICE_SENT, 'Notice Sent'),
+        (STATUS_PENDING_CURE, 'Pending Cure'),
+        (STATUS_CURED, 'Cured'),
+        (STATUS_HEARING_SCHEDULED, 'Hearing Scheduled'),
+        (STATUS_FINED, 'Fined'),
+        (STATUS_CLOSED, 'Closed'),
+    ]
+
+    # Severity levels
+    SEVERITY_LOW = 'LOW'
+    SEVERITY_MEDIUM = 'MEDIUM'
+    SEVERITY_HIGH = 'HIGH'
+    SEVERITY_CRITICAL = 'CRITICAL'
+
+    SEVERITY_CHOICES = [
+        (SEVERITY_LOW, 'Low'),
+        (SEVERITY_MEDIUM, 'Medium'),
+        (SEVERITY_HIGH, 'High'),
+        (SEVERITY_CRITICAL, 'Critical'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='violations'
+    )
+
+    owner = models.ForeignKey(
+        Owner,
+        on_delete=models.CASCADE,
+        related_name='violations'
+    )
+
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='violations'
+    )
+
+    violation_type = models.CharField(
+        max_length=255,
+        help_text="Type of violation (e.g., 'Unpainted Fence', 'Overgrown Lawn')"
+    )
+
+    description = models.TextField(
+        help_text="Detailed description of violation"
+    )
+
+    location = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Specific location on property"
+    )
+
+    severity = models.CharField(
+        max_length=20,
+        choices=SEVERITY_CHOICES,
+        default=SEVERITY_MEDIUM
+    )
+
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default=STATUS_REPORTED
+    )
+
+    reported_date = models.DateField(
+        help_text="Date violation was reported"
+    )
+
+    reported_by = models.CharField(
+        max_length=255,
+        help_text="Who reported the violation"
+    )
+
+    cure_deadline = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Deadline to cure violation"
+    )
+
+    cured_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date violation was cured"
+    )
+
+    fine_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Fine amount if assessed"
+    )
+
+    fine_paid = models.BooleanField(
+        default=False,
+        help_text="Whether fine has been paid"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Internal notes about this violation"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'violations'
+        ordering = ['-reported_date']
+        indexes = [
+            models.Index(fields=['tenant', '-reported_date']),
+            models.Index(fields=['owner', '-reported_date']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.violation_type} - {self.owner.full_name} ({self.status})"
+
+
+class ViolationPhoto(models.Model):
+    """
+    Photo evidence for violations.
+
+    Stores URLs/paths to uploaded photos.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    violation = models.ForeignKey(
+        Violation,
+        on_delete=models.CASCADE,
+        related_name='photos'
+    )
+
+    photo_url = models.URLField(
+        max_length=500,
+        help_text="URL to photo (S3, CloudFlare, etc.)"
+    )
+
+    caption = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Photo caption or description"
+    )
+
+    taken_date = models.DateField(
+        help_text="Date photo was taken"
+    )
+
+    uploaded_by = models.CharField(
+        max_length=255,
+        help_text="Who uploaded this photo"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'violation_photos'
+        ordering = ['taken_date']
+
+    def __str__(self):
+        return f"Photo for {self.violation.violation_type}"
+
+
+class ViolationNotice(models.Model):
+    """
+    Notices sent to owners about violations.
+
+    Tracks notice delivery and responses.
+    """
+
+    # Notice types
+    TYPE_FIRST_NOTICE = 'FIRST_NOTICE'
+    TYPE_SECOND_NOTICE = 'SECOND_NOTICE'
+    TYPE_FINAL_NOTICE = 'FINAL_NOTICE'
+    TYPE_HEARING_NOTICE = 'HEARING_NOTICE'
+    TYPE_FINE_NOTICE = 'FINE_NOTICE'
+
+    TYPE_CHOICES = [
+        (TYPE_FIRST_NOTICE, 'First Notice'),
+        (TYPE_SECOND_NOTICE, 'Second Notice'),
+        (TYPE_FINAL_NOTICE, 'Final Notice'),
+        (TYPE_HEARING_NOTICE, 'Hearing Notice'),
+        (TYPE_FINE_NOTICE, 'Fine Notice'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    violation = models.ForeignKey(
+        Violation,
+        on_delete=models.CASCADE,
+        related_name='notices'
+    )
+
+    notice_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES
+    )
+
+    sent_date = models.DateField(
+        help_text="Date notice was sent"
+    )
+
+    delivery_method = models.CharField(
+        max_length=20,
+        choices=CollectionNotice.METHOD_CHOICES,
+        default=CollectionNotice.METHOD_EMAIL
+    )
+
+    tracking_number = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Tracking number for certified mail"
+    )
+
+    delivered_date = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    notes = models.TextField(
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'violation_notices'
+        ordering = ['-sent_date']
+
+    def __str__(self):
+        return f"{self.get_notice_type_display()} for {self.violation}"
+
+
+class ViolationHearing(models.Model):
+    """
+    Hearing scheduling and outcomes for violations.
+
+    Board hearings for contested violations.
+    """
+
+    # Hearing outcomes
+    OUTCOME_PENDING = 'PENDING'
+    OUTCOME_UPHELD = 'UPHELD'
+    OUTCOME_OVERTURNED = 'OVERTURNED'
+    OUTCOME_MODIFIED = 'MODIFIED'
+    OUTCOME_POSTPONED = 'POSTPONED'
+
+    OUTCOME_CHOICES = [
+        (OUTCOME_PENDING, 'Pending'),
+        (OUTCOME_UPHELD, 'Upheld'),
+        (OUTCOME_OVERTURNED, 'Overturned'),
+        (OUTCOME_MODIFIED, 'Modified'),
+        (OUTCOME_POSTPONED, 'Postponed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    violation = models.ForeignKey(
+        Violation,
+        on_delete=models.CASCADE,
+        related_name='hearings'
+    )
+
+    scheduled_date = models.DateField(
+        help_text="Date hearing is scheduled"
+    )
+
+    scheduled_time = models.TimeField(
+        help_text="Time of hearing"
+    )
+
+    location = models.CharField(
+        max_length=255,
+        help_text="Hearing location or video conference link"
+    )
+
+    outcome = models.CharField(
+        max_length=20,
+        choices=OUTCOME_CHOICES,
+        default=OUTCOME_PENDING
+    )
+
+    outcome_notes = models.TextField(
+        blank=True,
+        help_text="Details of hearing outcome"
+    )
+
+    fine_assessed = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Fine amount assessed at hearing"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'violation_hearings'
+        ordering = ['-scheduled_date']
+
+    def __str__(self):
+        return f"Hearing for {self.violation} on {self.scheduled_date}"
