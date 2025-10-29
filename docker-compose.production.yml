@@ -32,7 +32,13 @@ services:
     container_name: hoa-backend
     restart: always
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-hoaadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hoaaccounting}
+      # Individual DB variables that Django settings.py expects
+      DB_NAME: ${POSTGRES_DB:-hoaaccounting}
+      DB_USER: ${POSTGRES_USER:-hoaadmin}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      # Django settings
       SECRET_KEY: ${DJANGO_SECRET_KEY}
       DEBUG: "False"
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
@@ -48,19 +54,20 @@ services:
         condition: service_healthy
     networks:
       - hoa-network
-    command: >
-      sh -c "
+    command:
+      - sh
+      - -c
+      - |
         python manage.py migrate --noinput &&
         python manage.py collectstatic --noinput &&
-        gunicorn hoaaccounting.wsgi:application
-          --bind 0.0.0.0:8009
-          --workers 4
-          --worker-class gthread
-          --threads 2
-          --timeout 120
-          --access-logfile -
+        gunicorn hoaaccounting.wsgi:application \
+          --bind 0.0.0.0:8009 \
+          --workers 4 \
+          --worker-class gthread \
+          --threads 2 \
+          --timeout 120 \
+          --access-logfile - \
           --error-logfile -
-      "
 
   # React Frontend
   frontend:
