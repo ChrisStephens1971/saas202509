@@ -11,7 +11,7 @@ import {
   createLateFeeRule,
   updateLateFeeRule,
   deleteLateFeeRule,
-  LateFeeRule
+  type LateFeeRule
 } from '../api/delinquency';
 
 export default function LateFeeRulesPage() {
