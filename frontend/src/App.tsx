@@ -12,6 +12,17 @@ import { BudgetVariancePage } from './pages/BudgetVariancePage'
 import { BankReconciliationPage } from './pages/BankReconciliationPage'
 import { ReconciliationDetailPage } from './pages/ReconciliationDetailPage'
 import { FundsPage } from './pages/FundsPage'
+import ReserveStudiesPage from './pages/ReserveStudiesPage'
+import CustomReportsPage from './pages/CustomReportsPage'
+import DelinquencyDashboardPage from './pages/DelinquencyDashboardPage'
+import LateFeeRulesPage from './pages/LateFeeRulesPage'
+import CollectionNoticesPage from './pages/CollectionNoticesPage'
+import CollectionActionsPage from './pages/CollectionActionsPage'
+import TransactionMatchingPage from './pages/TransactionMatchingPage'
+import MatchRulesPage from './pages/MatchRulesPage'
+import MatchStatisticsPage from './pages/MatchStatisticsPage'
+import ViolationsPage from './pages/ViolationsPage'
+import BoardPacketsPage from './pages/BoardPacketsPage'
 
 function App() {
   return (
@@ -106,6 +117,105 @@ function App() {
             element={
               <ProtectedRoute>
                 <FundsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/reserve-studies"
+            element={
+              <ProtectedRoute>
+                <ReserveStudiesPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/reports"
+            element={
+              <ProtectedRoute>
+                <CustomReportsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/delinquency"
+            element={
+              <ProtectedRoute>
+                <DelinquencyDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/late-fees"
+            element={
+              <ProtectedRoute>
+                <LateFeeRulesPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/collection-notices"
+            element={
+              <ProtectedRoute>
+                <CollectionNoticesPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/collection-actions"
+            element={
+              <ProtectedRoute>
+                <CollectionActionsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/matching"
+            element={
+              <ProtectedRoute>
+                <TransactionMatchingPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/match-rules"
+            element={
+              <ProtectedRoute>
+                <MatchRulesPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/match-statistics"
+            element={
+              <ProtectedRoute>
+                <MatchStatisticsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/violations"
+            element={
+              <ProtectedRoute>
+                <ViolationsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/board-packets"
+            element={
+              <ProtectedRoute>
+                <BoardPacketsPage />
               </ProtectedRoute>
             }
           />

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { Button } from '../ui/Button'
-import { Home, FileText, DollarSign, BookOpen, Wallet, LogOut, RefreshCw, Building2 } from 'lucide-react'
+import { Home, FileText, DollarSign, BookOpen, Wallet, LogOut, RefreshCw, Building2, TrendingUp, BarChart3, AlertCircle, Settings, Zap, AlertOctagon, FileBox } from 'lucide-react'
 
 interface LayoutProps {
   children: ReactNode
@@ -25,6 +25,13 @@ export function Layout({ children }: LayoutProps) {
     { to: '/budgets', icon: Wallet, label: 'Budgets' },
     { to: '/funds', icon: Building2, label: 'Funds' },
     { to: '/reconciliation', icon: RefreshCw, label: 'Reconciliation' },
+    { to: '/reserve-studies', icon: TrendingUp, label: 'Reserve Planning' },
+    { to: '/reports', icon: BarChart3, label: 'Custom Reports' },
+    { to: '/delinquency', icon: AlertCircle, label: 'Delinquency' },
+    { to: '/late-fees', icon: Settings, label: 'Late Fee Rules' },
+    { to: '/matching', icon: Zap, label: 'Auto-Matching' },
+    { to: '/violations', icon: AlertOctagon, label: 'Violations' },
+    { to: '/board-packets', icon: FileBox, label: 'Board Packets' },
   ]
 
   return (
