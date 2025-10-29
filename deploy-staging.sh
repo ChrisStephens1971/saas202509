@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 # Configuration
 PROJECT_NAME="HOA Accounting System"
 COMPOSE_FILE="docker-compose.production.yml"
+ENV_FILE=".env.production"
 
 # Helper functions
 function print_header() {
@@ -87,7 +88,7 @@ print_success "Environment file exists"
 
 # Check for running containers
 print_info "Checking for existing containers..."
-RUNNING=$(docker-compose -f $COMPOSE_FILE ps -q 2>/dev/null | wc -l)
+RUNNING=$(docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE ps -q 2>/dev/null | wc -l)
 if [ "$RUNNING" -gt 0 ]; then
     print_warning "Found $RUNNING running containers. They will be stopped and rebuilt."
     read -p "Continue? (y/n) " -n 1 -r
@@ -104,7 +105,7 @@ fi
 print_header "2. STOPPING EXISTING SERVICES"
 
 print_info "Stopping containers..."
-docker-compose -f $COMPOSE_FILE down 2>/dev/null || true
+docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE down 2>/dev/null || true
 print_success "Services stopped"
 
 #################################
@@ -113,7 +114,7 @@ print_success "Services stopped"
 print_header "3. BUILDING DOCKER IMAGES"
 
 print_info "Building images (this may take a few minutes)..."
-docker-compose -f $COMPOSE_FILE build --no-cache
+docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE build --no-cache
 
 print_success "Images built successfully"
 
@@ -123,7 +124,7 @@ print_success "Images built successfully"
 print_header "4. STARTING SERVICES"
 
 print_info "Starting containers in background..."
-docker-compose -f $COMPOSE_FILE up -d
+docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d
 
 # Wait for services to be healthy
 print_info "Waiting for services to be ready..."
@@ -131,11 +132,11 @@ sleep 10
 
 # Check service status
 print_info "Checking service status..."
-docker-compose -f $COMPOSE_FILE ps
+docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE ps
 
-HEALTHY=$(docker-compose -f $COMPOSE_FILE ps | grep -c "Up" || echo "0")
+HEALTHY=$(docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE ps | grep -c "Up" || echo "0")
 if [ "$HEALTHY" -lt 3 ]; then
-    print_error "Some services failed to start. Check logs with: docker-compose -f $COMPOSE_FILE logs"
+    print_error "Some services failed to start. Check logs with: docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE logs"
     exit 1
 fi
 print_success "All services are running"
@@ -148,7 +149,7 @@ print_header "5. DATABASE SETUP"
 # Wait for database to be ready
 print_info "Waiting for database to be ready..."
 for i in {1..30}; do
-    if docker-compose -f $COMPOSE_FILE exec -T backend python manage.py check --database default &>/dev/null; then
+    if docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec -T backend python manage.py check --database default &>/dev/null; then
         break
     fi
     echo -n "."
@@ -159,12 +160,12 @@ print_success "Database is ready"
 
 # Run migrations
 print_info "Running database migrations..."
-docker-compose -f $COMPOSE_FILE exec -T backend python manage.py migrate
+docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec -T backend python manage.py migrate
 print_success "Migrations complete"
 
 # Check if superuser exists
 print_info "Checking for superuser..."
-SUPERUSER_EXISTS=$(docker-compose -f $COMPOSE_FILE exec -T backend python manage.py shell <<EOF
+SUPERUSER_EXISTS=$(docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec -T backend python manage.py shell <<EOF
 from django.contrib.auth import get_user_model
 User = get_user_model()
 print(User.objects.filter(is_superuser=True).exists())
@@ -173,7 +174,7 @@ EOF
 
 if [[ "$SUPERUSER_EXISTS" == *"False"* ]]; then
     print_warning "No superuser found. You'll need to create one."
-    print_info "Run: docker-compose -f $COMPOSE_FILE exec backend python manage.py createsuperuser"
+    print_info "Run: docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec backend python manage.py createsuperuser"
 else
     print_success "Superuser exists"
 fi
@@ -184,7 +185,7 @@ fi
 print_header "6. STATIC FILES"
 
 print_info "Collecting static files..."
-docker-compose -f $COMPOSE_FILE exec -T backend python manage.py collectstatic --no-input
+docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec -T backend python manage.py collectstatic --no-input
 print_success "Static files collected"
 
 #################################
@@ -193,7 +194,7 @@ print_success "Static files collected"
 print_header "7. TEST DATA SETUP"
 
 print_info "Checking for test tenant..."
-TEST_TENANT_EXISTS=$(docker-compose -f $COMPOSE_FILE exec -T backend python manage.py shell <<EOF
+TEST_TENANT_EXISTS=$(docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec -T backend python manage.py shell <<EOF
 from tenants.models import Tenant
 print(Tenant.objects.filter(slug='test-hoa').exists())
 EOF
@@ -201,7 +202,7 @@ EOF
 
 if [[ "$TEST_TENANT_EXISTS" == *"False"* ]]; then
     print_info "Creating test tenant..."
-    docker-compose -f $COMPOSE_FILE exec -T backend python manage.py shell <<EOF
+    docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec -T backend python manage.py shell <<EOF
 from tenants.models import Tenant
 tenant = Tenant.objects.create(
     name="Test HOA",
@@ -262,15 +263,15 @@ echo "  Admin:     http://localhost/admin/"
 echo ""
 
 echo "Useful Commands:"
-echo "  View logs:        docker-compose -f $COMPOSE_FILE logs -f"
-echo "  Stop services:    docker-compose -f $COMPOSE_FILE stop"
-echo "  Restart services: docker-compose -f $COMPOSE_FILE restart"
-echo "  Shell access:     docker-compose -f $COMPOSE_FILE exec backend python manage.py shell"
+echo "  View logs:        docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE logs -f"
+echo "  Stop services:    docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE stop"
+echo "  Restart services: docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE restart"
+echo "  Shell access:     docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec backend python manage.py shell"
 echo "  Run tests:        ./smoke_tests.sh"
 echo ""
 
 echo "Next Steps:"
-echo "  1. Create superuser if needed:  docker-compose -f $COMPOSE_FILE exec backend python manage.py createsuperuser"
+echo "  1. Create superuser if needed:  docker-compose -f $COMPOSE_FILE --env-file $ENV_FILE exec backend python manage.py createsuperuser"
 echo "  2. Run smoke tests:             ./smoke_tests.sh"
 echo "  3. Test features manually"
 echo "  4. Run performance tests:       locust -f locustfile.py"
