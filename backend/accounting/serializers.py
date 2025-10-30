@@ -13,7 +13,13 @@ from .models import (
     LateFeeRule, DelinquencyStatus, CollectionNotice, CollectionAction,
     AutoMatchRule, MatchResult, MatchStatistics,
     Violation, ViolationPhoto, ViolationNotice, ViolationHearing,
-    BoardPacketTemplate, BoardPacket, PacketSection
+    BoardPacketTemplate, BoardPacket, PacketSection,
+    # Phase 3: Violation Tracking
+    ViolationType, FineSchedule, ViolationEscalation, ViolationFine,
+    # Phase 3: ARC Workflow
+    ARCRequestType, ARCRequest, ARCDocument, ARCReview, ARCApproval, ARCCompletion,
+    # Phase 3: Work Orders
+    WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice
 )
 
 
@@ -704,3 +710,397 @@ class BoardPacketTemplateSerializer(serializers.ModelSerializer):
             'is_default', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+# ============================================================================
+# PHASE 3: OPERATIONAL FEATURES - API Serializers
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Sprint 15: Violation Tracking Serializers
+# ----------------------------------------------------------------------------
+
+class ViolationTypeSerializer(serializers.ModelSerializer):
+    """Serializer for ViolationType model."""
+
+    class Meta:
+        model = ViolationType
+        fields = [
+            'id', 'tenant', 'code', 'name', 'description',
+            'category', 'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class FineScheduleSerializer(serializers.ModelSerializer):
+    """Serializer for FineSchedule model."""
+    violation_type_code = serializers.CharField(source='violation_type.code', read_only=True)
+    violation_type_name = serializers.CharField(source='violation_type.name', read_only=True)
+
+    class Meta:
+        model = FineSchedule
+        fields = [
+            'id', 'violation_type', 'violation_type_code', 'violation_type_name',
+            'step_number', 'step_name', 'days_after_previous',
+            'fine_amount', 'description', 'requires_board_approval',
+            'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class ViolationEscalationSerializer(serializers.ModelSerializer):
+    """Serializer for ViolationEscalation model."""
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ViolationEscalation
+        fields = [
+            'id', 'violation', 'step_number', 'step_name',
+            'escalated_at', 'fine_amount', 'notice_sent',
+            'notice_sent_at', 'notice_method', 'tracking_number',
+            'notes', 'created_by', 'created_by_name'
+        ]
+        read_only_fields = ['id', 'escalated_at']
+
+    def get_created_by_name(self, obj):
+        return f"{obj.created_by.first_name} {obj.created_by.last_name}" if obj.created_by else None
+
+
+class ViolationFineSerializer(serializers.ModelSerializer):
+    """Serializer for ViolationFine model."""
+    invoice_number = serializers.CharField(source='invoice.invoice_number', read_only=True)
+    waived_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ViolationFine
+        fields = [
+            'id', 'violation', 'escalation', 'invoice', 'invoice_number',
+            'journal_entry', 'amount', 'posted_date', 'paid_date',
+            'status', 'waived_reason', 'waived_by', 'waived_by_name',
+            'waived_at', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_waived_by_name(self, obj):
+        return f"{obj.waived_by.first_name} {obj.waived_by.last_name}" if obj.waived_by else None
+
+
+# Enhanced Violation serializer with Phase 3 relationships
+class ViolationDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for Violation model with Phase 3 relationships."""
+    unit_number = serializers.CharField(source='unit.unit_number', read_only=True)
+    owner_name = serializers.SerializerMethodField()
+    violation_type_name = serializers.CharField(source='violation_type.name', read_only=True)
+    photos = ViolationPhotoSerializer(many=True, read_only=True)
+    notices = ViolationNoticeSerializer(many=True, read_only=True)
+    escalations = ViolationEscalationSerializer(many=True, read_only=True)
+    fines = ViolationFineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Violation
+        fields = [
+            'id', 'tenant', 'unit', 'unit_number', 'owner', 'owner_name',
+            'violation_type', 'violation_type_name', 'status',
+            'discovered_date', 'due_date', 'cured_date',
+            'first_notice_date', 'compliance_date',
+            'description', 'resolution_notes',
+            'photos', 'notices', 'escalations', 'fines',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_owner_name(self, obj):
+        return f"{obj.owner.first_name} {obj.owner.last_name}" if obj.owner else None
+
+
+# ----------------------------------------------------------------------------
+# Sprint 16: ARC Workflow Serializers
+# ----------------------------------------------------------------------------
+
+class ARCRequestTypeSerializer(serializers.ModelSerializer):
+    """Serializer for ARCRequestType model."""
+
+    class Meta:
+        model = ARCRequestType
+        fields = [
+            'id', 'tenant', 'code', 'name', 'description',
+            'requires_plans', 'requires_contractor',
+            'typical_review_days', 'is_active',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ARCDocumentSerializer(serializers.ModelSerializer):
+    """Serializer for ARCDocument model."""
+    uploaded_by_name = serializers.SerializerMethodField()
+    document_type_display = serializers.CharField(source='get_document_type_display', read_only=True)
+
+    class Meta:
+        model = ARCDocument
+        fields = [
+            'id', 'request', 'document_type', 'document_type_display',
+            'file_url', 'file_name', 'file_size',
+            'uploaded_by', 'uploaded_by_name', 'uploaded_at'
+        ]
+        read_only_fields = ['id', 'uploaded_at']
+
+    def get_uploaded_by_name(self, obj):
+        return f"{obj.uploaded_by.first_name} {obj.uploaded_by.last_name}" if obj.uploaded_by else None
+
+
+class ARCReviewSerializer(serializers.ModelSerializer):
+    """Serializer for ARCReview model."""
+    reviewer_name = serializers.SerializerMethodField()
+    decision_display = serializers.CharField(source='get_decision_display', read_only=True)
+
+    class Meta:
+        model = ARCReview
+        fields = [
+            'id', 'request', 'reviewer', 'reviewer_name',
+            'review_date', 'decision', 'decision_display',
+            'comments', 'conditions'
+        ]
+        read_only_fields = ['id', 'review_date']
+
+    def get_reviewer_name(self, obj):
+        return f"{obj.reviewer.first_name} {obj.reviewer.last_name}" if obj.reviewer else None
+
+
+class ARCApprovalSerializer(serializers.ModelSerializer):
+    """Serializer for ARCApproval model."""
+    approved_by_name = serializers.SerializerMethodField()
+    final_decision_display = serializers.CharField(source='get_final_decision_display', read_only=True)
+
+    class Meta:
+        model = ARCApproval
+        fields = [
+            'id', 'request', 'final_decision', 'final_decision_display',
+            'decision_date', 'conditions', 'expiration_date',
+            'approved_by', 'approved_by_name', 'board_resolution',
+            'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def get_approved_by_name(self, obj):
+        return f"{obj.approved_by.first_name} {obj.approved_by.last_name}" if obj.approved_by else None
+
+
+class ARCCompletionSerializer(serializers.ModelSerializer):
+    """Serializer for ARCCompletion model."""
+    inspected_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ARCCompletion
+        fields = [
+            'id', 'request', 'inspected_by', 'inspected_by_name',
+            'inspection_date', 'complies_with_approval',
+            'inspector_notes', 'photo_url', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def get_inspected_by_name(self, obj):
+        return f"{obj.inspected_by.first_name} {obj.inspected_by.last_name}" if obj.inspected_by else None
+
+
+class ARCRequestSerializer(serializers.ModelSerializer):
+    """Serializer for ARCRequest model - List view."""
+    unit_number = serializers.CharField(source='unit.unit_number', read_only=True)
+    owner_name = serializers.SerializerMethodField()
+    request_type_name = serializers.CharField(source='request_type.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = ARCRequest
+        fields = [
+            'id', 'tenant', 'unit', 'unit_number', 'owner', 'owner_name',
+            'request_type', 'request_type_name', 'status', 'status_display',
+            'title', 'description', 'requested_start_date',
+            'estimated_completion_date', 'contractor_name',
+            'submitted_at', 'reviewed_at', 'completed_at',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_owner_name(self, obj):
+        return f"{obj.owner.first_name} {obj.owner.last_name}" if obj.owner else None
+
+
+class ARCRequestDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for ARCRequest model with all relationships."""
+    unit_number = serializers.CharField(source='unit.unit_number', read_only=True)
+    owner_name = serializers.SerializerMethodField()
+    request_type_name = serializers.CharField(source='request_type.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    documents = ARCDocumentSerializer(many=True, read_only=True)
+    reviews = ARCReviewSerializer(many=True, read_only=True)
+    approval = ARCApprovalSerializer(read_only=True)
+    completion = ARCCompletionSerializer(read_only=True)
+
+    class Meta:
+        model = ARCRequest
+        fields = [
+            'id', 'tenant', 'unit', 'unit_number', 'owner', 'owner_name',
+            'request_type', 'request_type_name', 'status', 'status_display',
+            'title', 'description', 'requested_start_date',
+            'estimated_completion_date', 'contractor_name',
+            'contractor_license', 'contractor_phone',
+            'submitted_at', 'reviewed_at', 'completed_at',
+            'documents', 'reviews', 'approval', 'completion',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_owner_name(self, obj):
+        return f"{obj.owner.first_name} {obj.owner.last_name}" if obj.owner else None
+
+
+# ----------------------------------------------------------------------------
+# Sprint 17: Work Order System Serializers
+# ----------------------------------------------------------------------------
+
+class WorkOrderCategorySerializer(serializers.ModelSerializer):
+    """Serializer for WorkOrderCategory model."""
+    default_gl_account_name = serializers.CharField(source='default_gl_account.name', read_only=True)
+
+    class Meta:
+        model = WorkOrderCategory
+        fields = [
+            'id', 'tenant', 'code', 'name', 'description',
+            'default_gl_account', 'default_gl_account_name',
+            'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class VendorSerializer(serializers.ModelSerializer):
+    """Serializer for Vendor model."""
+
+    class Meta:
+        model = Vendor
+        fields = [
+            'id', 'tenant', 'name', 'contact_name', 'phone',
+            'email', 'address', 'tax_id', 'license_number',
+            'insurance_expiration', 'payment_terms', 'specialty',
+            'is_active', 'notes', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class WorkOrderCommentSerializer(serializers.ModelSerializer):
+    """Serializer for WorkOrderComment model."""
+    commented_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkOrderComment
+        fields = [
+            'id', 'work_order', 'comment', 'commented_by',
+            'commented_by_name', 'commented_at', 'is_internal'
+        ]
+        read_only_fields = ['id', 'commented_at']
+
+    def get_commented_by_name(self, obj):
+        return f"{obj.commented_by.first_name} {obj.commented_by.last_name}" if obj.commented_by else None
+
+
+class WorkOrderAttachmentSerializer(serializers.ModelSerializer):
+    """Serializer for WorkOrderAttachment model."""
+    uploaded_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkOrderAttachment
+        fields = [
+            'id', 'work_order', 'file_url', 'file_name',
+            'uploaded_by', 'uploaded_by_name', 'uploaded_at'
+        ]
+        read_only_fields = ['id', 'uploaded_at']
+
+    def get_uploaded_by_name(self, obj):
+        return f"{obj.uploaded_by.first_name} {obj.uploaded_by.last_name}" if obj.uploaded_by else None
+
+
+class WorkOrderInvoiceSerializer(serializers.ModelSerializer):
+    """Serializer for WorkOrderInvoice model."""
+    vendor_name = serializers.CharField(source='vendor.name', read_only=True)
+    approved_by_name = serializers.SerializerMethodField()
+    payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
+
+    class Meta:
+        model = WorkOrderInvoice
+        fields = [
+            'id', 'work_order', 'vendor', 'vendor_name',
+            'invoice_number', 'invoice_date', 'amount',
+            'payment_status', 'payment_status_display',
+            'journal_entry', 'approved_by', 'approved_by_name',
+            'approved_at', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_approved_by_name(self, obj):
+        return f"{obj.approved_by.first_name} {obj.approved_by.last_name}" if obj.approved_by else None
+
+
+class WorkOrderSerializer(serializers.ModelSerializer):
+    """Serializer for WorkOrder model - List view."""
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    vendor_name = serializers.CharField(source='assigned_to_vendor.name', read_only=True)
+    assigned_staff_name = serializers.SerializerMethodField()
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    unit_number = serializers.CharField(source='unit.unit_number', read_only=True)
+
+    class Meta:
+        model = WorkOrder
+        fields = [
+            'id', 'tenant', 'work_order_number', 'category', 'category_name',
+            'title', 'description', 'priority', 'priority_display',
+            'status', 'status_display', 'location', 'unit', 'unit_number',
+            'requested_by', 'assigned_to_vendor', 'vendor_name',
+            'assigned_to_staff', 'assigned_staff_name',
+            'estimated_cost', 'actual_cost', 'gl_account', 'fund',
+            'requested_date', 'scheduled_date', 'completed_date',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_assigned_staff_name(self, obj):
+        return f"{obj.assigned_to_staff.first_name} {obj.assigned_to_staff.last_name}" if obj.assigned_to_staff else None
+
+
+class WorkOrderDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for WorkOrder model with all relationships."""
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    vendor_name = serializers.CharField(source='assigned_to_vendor.name', read_only=True)
+    assigned_staff_name = serializers.SerializerMethodField()
+    requested_by_name = serializers.SerializerMethodField()
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    unit_number = serializers.CharField(source='unit.unit_number', read_only=True)
+    gl_account_name = serializers.CharField(source='gl_account.name', read_only=True)
+    fund_name = serializers.CharField(source='fund.name', read_only=True)
+    comments = WorkOrderCommentSerializer(many=True, read_only=True)
+    attachments = WorkOrderAttachmentSerializer(many=True, read_only=True)
+    invoices = WorkOrderInvoiceSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = WorkOrder
+        fields = [
+            'id', 'tenant', 'work_order_number', 'category', 'category_name',
+            'title', 'description', 'priority', 'priority_display',
+            'status', 'status_display', 'location', 'unit', 'unit_number',
+            'requested_by', 'requested_by_name',
+            'assigned_to_vendor', 'vendor_name',
+            'assigned_to_staff', 'assigned_staff_name',
+            'estimated_cost', 'actual_cost',
+            'gl_account', 'gl_account_name', 'fund', 'fund_name',
+            'requested_date', 'scheduled_date', 'completed_date',
+            'comments', 'attachments', 'invoices',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_assigned_staff_name(self, obj):
+        return f"{obj.assigned_to_staff.first_name} {obj.assigned_to_staff.last_name}" if obj.assigned_to_staff else None
+
+    def get_requested_by_name(self, obj):
+        return f"{obj.requested_by.first_name} {obj.requested_by.last_name}" if obj.requested_by else None

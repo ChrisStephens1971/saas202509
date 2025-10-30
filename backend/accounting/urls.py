@@ -13,6 +13,14 @@ from .api_views import (
     AutoMatchRuleViewSet, MatchResultViewSet, MatchStatisticsViewSet,
     ViolationViewSet, ViolationPhotoViewSet, ViolationNoticeViewSet, ViolationHearingViewSet,
     BoardPacketTemplateViewSet, BoardPacketViewSet, PacketSectionViewSet,
+    # Phase 3 Sprint 15: Violation Tracking (New Models)
+    ViolationTypeViewSet, FineScheduleViewSet, ViolationEscalationViewSet, ViolationFineViewSet,
+    # Phase 3 Sprint 16: ARC Workflow
+    ARCRequestTypeViewSet, ARCRequestViewSet, ARCDocumentViewSet, ARCReviewViewSet,
+    ARCApprovalViewSet, ARCCompletionViewSet,
+    # Phase 3 Sprint 17: Work Orders
+    WorkOrderCategoryViewSet, VendorViewSet, WorkOrderViewSet, WorkOrderCommentViewSet,
+    WorkOrderAttachmentViewSet, WorkOrderInvoiceViewSet,
     ar_aging_report, owner_ledger, dashboard_metrics, trial_balance
 )
 
@@ -54,6 +62,28 @@ router.register(r'violation-hearings', ViolationHearingViewSet, basename='violat
 router.register(r'board-packet-templates', BoardPacketTemplateViewSet, basename='board-packet-template')
 router.register(r'board-packets', BoardPacketViewSet, basename='board-packet')
 router.register(r'packet-sections', PacketSectionViewSet, basename='packet-section')
+
+# Phase 3 Sprint 15: Violation Tracking (New Models)
+router.register(r'violation-types', ViolationTypeViewSet, basename='violation-type')
+router.register(r'fine-schedules', FineScheduleViewSet, basename='fine-schedule')
+router.register(r'violation-escalations', ViolationEscalationViewSet, basename='violation-escalation')
+router.register(r'violation-fines', ViolationFineViewSet, basename='violation-fine')
+
+# Phase 3 Sprint 16: ARC Workflow
+router.register(r'arc-request-types', ARCRequestTypeViewSet, basename='arc-request-type')
+router.register(r'arc-requests', ARCRequestViewSet, basename='arc-request')
+router.register(r'arc-documents', ARCDocumentViewSet, basename='arc-document')
+router.register(r'arc-reviews', ARCReviewViewSet, basename='arc-review')
+router.register(r'arc-approvals', ARCApprovalViewSet, basename='arc-approval')
+router.register(r'arc-completions', ARCCompletionViewSet, basename='arc-completion')
+
+# Phase 3 Sprint 17: Work Order System
+router.register(r'work-order-categories', WorkOrderCategoryViewSet, basename='work-order-category')
+router.register(r'vendors', VendorViewSet, basename='vendor')
+router.register(r'work-orders', WorkOrderViewSet, basename='work-order')
+router.register(r'work-order-comments', WorkOrderCommentViewSet, basename='work-order-comment')
+router.register(r'work-order-attachments', WorkOrderAttachmentViewSet, basename='work-order-attachment')
+router.register(r'work-order-invoices', WorkOrderInvoiceViewSet, basename='work-order-invoice')
 
 # URL patterns
 urlpatterns = [

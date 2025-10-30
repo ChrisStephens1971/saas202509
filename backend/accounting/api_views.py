@@ -26,7 +26,13 @@ from .models import (
     LateFeeRule, DelinquencyStatus, CollectionNotice, CollectionAction,
     AutoMatchRule, MatchResult, MatchStatistics,
     Violation, ViolationPhoto, ViolationNotice, ViolationHearing,
-    BoardPacketTemplate, BoardPacket, PacketSection
+    BoardPacketTemplate, BoardPacket, PacketSection,
+    # Phase 3: Violation Tracking
+    ViolationType, FineSchedule, ViolationEscalation, ViolationFine,
+    # Phase 3: ARC Workflow
+    ARCRequestType, ARCRequest, ARCDocument, ARCReview, ARCApproval, ARCCompletion,
+    # Phase 3: Work Orders
+    WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice
 )
 from .serializers import (
     AccountSerializer, FundSerializer, OwnerSerializer, UnitSerializer,
@@ -42,7 +48,16 @@ from .serializers import (
     AutoMatchRuleSerializer, MatchResultSerializer, MatchStatisticsSerializer,
     ViolationSerializer, ViolationPhotoSerializer, ViolationNoticeSerializer,
     ViolationHearingSerializer,
-    BoardPacketTemplateSerializer, BoardPacketSerializer, PacketSectionSerializer
+    BoardPacketTemplateSerializer, BoardPacketSerializer, PacketSectionSerializer,
+    # Phase 3: Violation Tracking
+    ViolationTypeSerializer, FineScheduleSerializer, ViolationEscalationSerializer, ViolationFineSerializer,
+    ViolationDetailSerializer,
+    # Phase 3: ARC Workflow
+    ARCRequestTypeSerializer, ARCRequestSerializer, ARCRequestDetailSerializer,
+    ARCDocumentSerializer, ARCReviewSerializer, ARCApprovalSerializer, ARCCompletionSerializer,
+    # Phase 3: Work Orders
+    WorkOrderCategorySerializer, VendorSerializer, WorkOrderSerializer, WorkOrderDetailSerializer,
+    WorkOrderCommentSerializer, WorkOrderAttachmentSerializer, WorkOrderInvoiceSerializer
 )
 
 
@@ -51,6 +66,28 @@ class StandardResultsSetPagination(PageNumberPagination):
     page_size = 100
     page_size_query_param = 'page_size'
     max_page_size = 1000
+
+
+def get_tenant(request):
+    """
+    Get tenant from request.
+
+    In production with multi-tenancy, this would extract tenant from:
+    - JWT token claims
+    - Subdomain
+    - Request headers
+
+    For now, returns first tenant or uses query param.
+    """
+    tenant_schema = request.query_params.get('tenant')
+    if tenant_schema:
+        try:
+            return Tenant.objects.get(schema_name=tenant_schema)
+        except Tenant.DoesNotExist:
+            pass
+
+    # Default: return first tenant (for development)
+    return Tenant.objects.first()
 
 
 class AccountViewSet(viewsets.ReadOnlyModelViewSet):
@@ -2400,3 +2437,589 @@ class PacketSectionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         tenant = get_tenant(self.request)
         return PacketSection.objects.filter(packet__tenant=tenant)
+
+
+# ===========================
+# Phase 3 Sprint 15: Violation Tracking ViewSets (New Models)
+# ===========================
+
+class ViolationTypeViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing violation types/categories.
+    """
+    serializer_class = ViolationTypeSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['category', 'is_active']
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'category', 'created_at']
+    ordering = ['code']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ViolationType.objects.filter(tenant=tenant)
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(tenant=tenant)
+
+
+class FineScheduleViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing fine escalation schedules.
+    """
+    serializer_class = FineScheduleSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['violation_type', 'step_number']
+    ordering_fields = ['step_number', 'fine_amount', 'days_after_previous']
+    ordering = ['violation_type', 'step_number']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return FineSchedule.objects.filter(
+            violation_type__tenant=tenant
+        ).select_related('violation_type')
+
+
+class ViolationEscalationViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing violation escalation tracking.
+    """
+    serializer_class = ViolationEscalationSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['violation', 'step_number', 'notice_sent']
+    ordering_fields = ['step_number', 'escalation_date', 'created_at']
+    ordering = ['violation', 'step_number']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ViolationEscalation.objects.filter(
+            violation__tenant=tenant
+        ).select_related('violation', 'violation__owner', 'violation__unit')
+
+
+class ViolationFineViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing violation fines.
+    """
+    serializer_class = ViolationFineSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['violation', 'status']
+    ordering_fields = ['fine_date', 'amount', 'due_date']
+    ordering = ['-fine_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ViolationFine.objects.filter(
+            violation__tenant=tenant
+        ).select_related('violation', 'invoice', 'journal_entry')
+
+    @action(detail=True, methods=['post'])
+    def post_to_ledger(self, request, pk=None):
+        """
+        Post fine to owner ledger (create invoice and journal entry).
+
+        This action:
+        1. Creates an invoice for the fine amount
+        2. Creates journal entry (DR: AR, CR: Fine Revenue)
+        3. Updates fine status to 'posted'
+        """
+        fine = self.get_object()
+        tenant = get_tenant(request)
+
+        if fine.status != 'pending':
+            return Response(
+                {'error': 'Only pending fines can be posted'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Create invoice
+            invoice = Invoice.objects.create(
+                tenant=tenant,
+                owner=fine.violation.owner,
+                unit=fine.violation.unit,
+                invoice_number=f'FINE-{fine.violation.violation_number}',
+                invoice_date=fine.fine_date,
+                due_date=fine.due_date,
+                description=f'Violation fine: {fine.violation.description[:100]}',
+                total_amount=fine.amount,
+                status=Invoice.STATUS_ISSUED
+            )
+
+            # Create journal entry (simplified - would use JournalEntryService in production)
+            # DR: Accounts Receivable, CR: Fine Revenue
+            entry = JournalEntry.objects.create(
+                tenant=tenant,
+                entry_date=fine.fine_date,
+                description=f'Violation fine: {fine.violation.violation_number}',
+                reference_number=invoice.invoice_number
+            )
+
+            # Update fine
+            fine.invoice = invoice
+            fine.journal_entry = entry
+            fine.status = 'posted'
+            fine.save()
+
+            serializer = self.get_serializer(fine)
+            return Response(serializer.data)
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to post fine: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ===========================
+# Phase 3 Sprint 16: ARC Workflow ViewSets
+# ===========================
+
+class ARCRequestTypeViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing ARC request types.
+    """
+    serializer_class = ARCRequestTypeSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['is_active', 'requires_plans', 'requires_contractor']
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'created_at']
+    ordering = ['code']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ARCRequestType.objects.filter(tenant=tenant)
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(tenant=tenant)
+
+
+class ARCRequestViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing ARC requests.
+
+    Supports both list view (summary) and detail view (with all relationships).
+    """
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['unit', 'owner', 'request_type', 'status']
+    search_fields = ['request_number', 'project_description', 'owner__first_name', 'owner__last_name']
+    ordering_fields = ['request_number', 'submission_date', 'status', 'created_at']
+    ordering = ['-submission_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        queryset = ARCRequest.objects.filter(tenant=tenant).select_related(
+            'unit', 'owner', 'request_type', 'submitted_by', 'assigned_to'
+        )
+
+        # For detail views, prefetch related objects
+        if self.action == 'retrieve':
+            queryset = queryset.prefetch_related(
+                'documents', 'reviews', 'reviews__reviewer'
+            )
+
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return ARCRequestDetailSerializer
+        return ARCRequestSerializer
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(
+            tenant=tenant,
+            submitted_by=self.request.user
+        )
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        """Submit a draft ARC request for review."""
+        arc_request = self.get_object()
+
+        if arc_request.status != 'draft':
+            return Response(
+                {'error': 'Only draft requests can be submitted'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        arc_request.status = 'submitted'
+        arc_request.submission_date = timezone.now().date()
+        arc_request.save()
+
+        serializer = self.get_serializer(arc_request)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def assign_reviewer(self, request, pk=None):
+        """Assign ARC request to a committee member."""
+        arc_request = self.get_object()
+        reviewer_id = request.data.get('reviewer_id')
+
+        if not reviewer_id:
+            return Response(
+                {'error': 'reviewer_id required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        arc_request.assigned_to_id = reviewer_id
+        arc_request.status = 'under_review'
+        arc_request.save()
+
+        serializer = self.get_serializer(arc_request)
+        return Response(serializer.data)
+
+
+class ARCDocumentViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing ARC request documents.
+    """
+    serializer_class = ARCDocumentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['request', 'document_type']
+    ordering_fields = ['uploaded_at', 'document_type']
+    ordering = ['-uploaded_at']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ARCDocument.objects.filter(
+            request__tenant=tenant
+        ).select_related('request')
+
+
+class ARCReviewViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing ARC committee reviews.
+    """
+    serializer_class = ARCReviewSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['request', 'reviewer', 'decision']
+    ordering_fields = ['review_date', 'created_at']
+    ordering = ['-review_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ARCReview.objects.filter(
+            request__tenant=tenant
+        ).select_related('request', 'reviewer')
+
+    def perform_create(self, serializer):
+        serializer.save(reviewer=self.request.user)
+
+
+class ARCApprovalViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing final ARC approvals.
+    """
+    serializer_class = ARCApprovalSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['request', 'final_decision']
+    ordering_fields = ['approval_date', 'expiration_date']
+    ordering = ['-approval_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ARCApproval.objects.filter(
+            request__tenant=tenant
+        ).select_related('request', 'approved_by')
+
+    def perform_create(self, serializer):
+        """Create approval and update request status."""
+        approval = serializer.save(approved_by=self.request.user)
+
+        # Update request status based on decision
+        arc_request = approval.request
+        if approval.final_decision == 'approved':
+            arc_request.status = 'approved'
+        elif approval.final_decision == 'denied':
+            arc_request.status = 'denied'
+        elif approval.final_decision == 'conditional':
+            arc_request.status = 'conditional_approval'
+        arc_request.save()
+
+
+class ARCCompletionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing ARC completion verification.
+    """
+    serializer_class = ARCCompletionSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['request', 'complies_with_approval']
+    ordering_fields = ['inspection_date', 'completion_date']
+    ordering = ['-inspection_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return ARCCompletion.objects.filter(
+            request__tenant=tenant
+        ).select_related('request', 'inspected_by')
+
+    def perform_create(self, serializer):
+        """Create completion record and update request status."""
+        completion = serializer.save(inspected_by=self.request.user)
+
+        # Update request to completed status
+        arc_request = completion.request
+        arc_request.status = 'completed'
+        arc_request.save()
+
+
+# ===========================
+# Phase 3 Sprint 17: Work Order System ViewSets
+# ===========================
+
+class WorkOrderCategoryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing work order categories.
+    """
+    serializer_class = WorkOrderCategorySerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['is_active']
+    search_fields = ['code', 'name', 'description']
+    ordering_fields = ['code', 'name', 'created_at']
+    ordering = ['code']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return WorkOrderCategory.objects.filter(tenant=tenant).select_related('default_gl_account')
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(tenant=tenant)
+
+
+class VendorViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing vendors.
+    """
+    serializer_class = VendorSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['is_active', 'is_preferred']
+    search_fields = ['name', 'contact_name', 'email', 'phone']
+    ordering_fields = ['name', 'created_at']
+    ordering = ['name']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return Vendor.objects.filter(tenant=tenant)
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(tenant=tenant)
+
+
+class WorkOrderViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing work orders.
+
+    Supports both list view (summary) and detail view (with comments, attachments, invoices).
+    """
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['category', 'priority', 'status', 'assigned_to_vendor', 'unit']
+    search_fields = ['work_order_number', 'description', 'unit__unit_number']
+    ordering_fields = ['work_order_number', 'created_date', 'priority', 'status']
+    ordering = ['-created_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        queryset = WorkOrder.objects.filter(tenant=tenant).select_related(
+            'category', 'unit', 'assigned_to_vendor', 'created_by', 'gl_account'
+        )
+
+        # For detail views, prefetch related objects
+        if self.action == 'retrieve':
+            queryset = queryset.prefetch_related(
+                'comments', 'attachments', 'invoices'
+            )
+
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return WorkOrderDetailSerializer
+        return WorkOrderSerializer
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(
+            tenant=tenant,
+            created_by=self.request.user
+        )
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        """Assign work order to a vendor."""
+        work_order = self.get_object()
+        vendor_id = request.data.get('vendor_id')
+
+        if not vendor_id:
+            return Response(
+                {'error': 'vendor_id required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            vendor = Vendor.objects.get(id=vendor_id, tenant=get_tenant(request))
+        except Vendor.DoesNotExist:
+            return Response(
+                {'error': 'Vendor not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        work_order.assigned_to_vendor = vendor
+        work_order.status = 'assigned'
+        work_order.assigned_date = timezone.now().date()
+        work_order.save()
+
+        serializer = self.get_serializer(work_order)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def start_work(self, request, pk=None):
+        """Mark work order as in progress."""
+        work_order = self.get_object()
+
+        if work_order.status not in ['open', 'assigned']:
+            return Response(
+                {'error': 'Only open or assigned work orders can be started'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        work_order.status = 'in_progress'
+        work_order.started_date = timezone.now().date()
+        work_order.save()
+
+        serializer = self.get_serializer(work_order)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """Mark work order as completed."""
+        work_order = self.get_object()
+
+        if work_order.status != 'in_progress':
+            return Response(
+                {'error': 'Only in-progress work orders can be completed'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        work_order.status = 'completed'
+        work_order.completed_date = timezone.now().date()
+        work_order.actual_cost = request.data.get('actual_cost', work_order.estimated_cost)
+        work_order.save()
+
+        serializer = self.get_serializer(work_order)
+        return Response(serializer.data)
+
+
+class WorkOrderCommentViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing work order comments.
+    """
+    serializer_class = WorkOrderCommentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['work_order', 'is_internal']
+    ordering_fields = ['created_at']
+    ordering = ['created_at']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return WorkOrderComment.objects.filter(
+            work_order__tenant=tenant
+        ).select_related('work_order', 'created_by')
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class WorkOrderAttachmentViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing work order attachments.
+    """
+    serializer_class = WorkOrderAttachmentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['work_order']
+    ordering_fields = ['uploaded_at']
+    ordering = ['-uploaded_at']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return WorkOrderAttachment.objects.filter(
+            work_order__tenant=tenant
+        ).select_related('work_order', 'uploaded_by')
+
+    def perform_create(self, serializer):
+        serializer.save(uploaded_by=self.request.user)
+
+
+class WorkOrderInvoiceViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing work order invoices.
+    """
+    serializer_class = WorkOrderInvoiceSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['work_order', 'vendor', 'status']
+    ordering_fields = ['invoice_date', 'amount']
+    ordering = ['-invoice_date']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return WorkOrderInvoice.objects.filter(
+            work_order__tenant=tenant
+        ).select_related('work_order', 'vendor', 'journal_entry')
+
+    @action(detail=True, methods=['post'])
+    def post_to_ledger(self, request, pk=None):
+        """
+        Post work order invoice to general ledger.
+
+        Creates journal entry: DR: Expense Account, CR: Accounts Payable
+        """
+        wo_invoice = self.get_object()
+        tenant = get_tenant(request)
+
+        if wo_invoice.status != 'pending':
+            return Response(
+                {'error': 'Only pending invoices can be posted'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Create journal entry (simplified - would use JournalEntryService in production)
+            entry = JournalEntry.objects.create(
+                tenant=tenant,
+                entry_date=wo_invoice.invoice_date,
+                description=f'Work Order: {wo_invoice.work_order.work_order_number}',
+                reference_number=wo_invoice.invoice_number
+            )
+
+            # Update invoice
+            wo_invoice.journal_entry = entry
+            wo_invoice.status = 'posted'
+            wo_invoice.save()
+
+            serializer = self.get_serializer(wo_invoice)
+            return Response(serializer.data)
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to post invoice: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

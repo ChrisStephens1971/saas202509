@@ -342,8 +342,8 @@ class FineScheduleAdmin(admin.ModelAdmin):
 
 @admin.register(Violation)
 class ViolationAdmin(admin.ModelAdmin):
-    list_display = ['unit', 'owner', 'violation_type', 'status', 'discovered_date', 'cured_date', 'tenant']
-    list_filter = ['status', 'tenant', 'discovered_date']
+    list_display = ['unit', 'owner', 'violation_type', 'status', 'reported_date', 'cured_date', 'tenant']
+    list_filter = ['status', 'tenant', 'reported_date']
     search_fields = ['unit__unit_number', 'owner__last_name', 'description']
     readonly_fields = ['id', 'created_at', 'updated_at']
 
@@ -474,7 +474,7 @@ class WorkOrderInvoiceAdmin(admin.ModelAdmin):
 
 @admin.register(ReserveStudy)
 class ReserveStudyAdmin(admin.ModelAdmin):
-    list_display = ['name', 'study_date', 'horizon_years', 'current_reserve_balance', 'tenant']
+    list_display = ['name', 'study_date', 'horizon_years', 'tenant']
     list_filter = ['study_date', 'tenant']
     search_fields = ['name', 'notes']
     readonly_fields = ['id', 'created_at', 'updated_at']
@@ -482,10 +482,10 @@ class ReserveStudyAdmin(admin.ModelAdmin):
 
 @admin.register(ReserveComponent)
 class ReserveComponentAdmin(admin.ModelAdmin):
-    list_display = ['name', 'study', 'useful_life_years', 'remaining_life_years', 'replacement_cost', 'category']
+    list_display = ['name', 'study', 'useful_life_years', 'remaining_life_years', 'current_cost', 'category']
     list_filter = ['category', 'study']
     search_fields = ['name', 'description']
-    readonly_fields = ['id', 'inflation_adjusted_cost', 'created_at', 'updated_at']
+    readonly_fields = ['id', 'created_at', 'updated_at']
 
 
 @admin.register(ReserveScenario)
@@ -510,7 +510,7 @@ class BudgetAdmin(admin.ModelAdmin):
 
 @admin.register(BudgetLine)
 class BudgetLineAdmin(admin.ModelAdmin):
-    list_display = ['budget', 'fund', 'gl_account', 'category', 'annual_amount', 'monthly_amount']
-    list_filter = ['category', 'fund', 'budget']
-    search_fields = ['gl_account__account_number', 'gl_account__name', 'notes']
+    list_display = ['budget', 'account', 'budgeted_amount']
+    list_filter = ['budget']
+    search_fields = ['account__account_number', 'account__name', 'notes']
     readonly_fields = ['id']
