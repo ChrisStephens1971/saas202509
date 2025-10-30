@@ -4442,3 +4442,1251 @@ class PacketSection(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.packet.title})"
+
+
+# ============================================================================
+# PHASE 3: OPERATIONAL FEATURES - Additional Models
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Sprint 15: Violation Tracking - Additional Models
+# ----------------------------------------------------------------------------
+
+class ViolationType(models.Model):
+    """
+    Types/categories of violations (landscaping, parking, noise, etc.).
+
+    Defines violation categories with fine schedules.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='violation_types'
+    )
+
+    code = models.CharField(
+        max_length=20,
+        help_text="Short code (e.g., 'LAND-001', 'PARK-002')"
+    )
+
+    name = models.CharField(
+        max_length=100,
+        help_text="Violation name (e.g., 'Overgrown Lawn')"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Detailed description of violation"
+    )
+
+    category = models.CharField(
+        max_length=50,
+        help_text="Category (Landscaping, Parking, Noise, Structural, etc.)"
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Is this violation type active?"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'violation_types'
+        unique_together = [['tenant', 'code']]
+        ordering = ['category', 'code']
+        indexes = [
+            models.Index(fields=['tenant', 'is_active']),
+            models.Index(fields=['category']),
+        ]
+
+    def __str__(self):
+        return f"{self.code}: {self.name}"
+
+
+class FineSchedule(models.Model):
+    """
+    Fine escalation schedule for violation types.
+
+    Defines steps and fines for each violation type.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    violation_type = models.ForeignKey(
+        ViolationType,
+        on_delete=models.CASCADE,
+        related_name='fine_schedule_steps'
+    )
+
+    step_number = models.IntegerField(
+        help_text="Step in escalation (1=courtesy, 2=warning, 3=fine, etc.)"
+    )
+
+    step_name = models.CharField(
+        max_length=50,
+        help_text="Step name (Courtesy, Warning, Fine, Continued, Legal)"
+    )
+
+    days_after_previous = models.IntegerField(
+        default=7,
+        help_text="Days after previous step"
+    )
+
+    fine_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Fine amount for this step"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Description of this step"
+    )
+
+    requires_board_approval = models.BooleanField(
+        default=False,
+        help_text="Does this step require board approval?"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'fine_schedules'
+        unique_together = [['violation_type', 'step_number']]
+        ordering = ['violation_type', 'step_number']
+
+    def __str__(self):
+        return f"{self.violation_type.code} - Step {self.step_number}: {self.step_name}"
+
+
+class ViolationEscalation(models.Model):
+    """
+    Tracks escalation steps for violations.
+
+    Records each step in the violation escalation process.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    violation = models.ForeignKey(
+        Violation,
+        on_delete=models.CASCADE,
+        related_name='escalations'
+    )
+
+    step_number = models.IntegerField(
+        help_text="Escalation step number"
+    )
+
+    step_name = models.CharField(
+        max_length=50,
+        help_text="Step name"
+    )
+
+    escalated_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this step was triggered"
+    )
+
+    fine_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Fine amount for this step"
+    )
+
+    notice_sent = models.BooleanField(
+        default=False,
+        help_text="Was notice sent?"
+    )
+
+    notice_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When notice was sent"
+    )
+
+    notice_method = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Email, Certified Mail, Hand Delivered"
+    )
+
+    tracking_number = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="USPS tracking number for certified mail"
+    )
+
+    notes = models.TextField(
+        blank=True,
+        help_text="Notes about this escalation"
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='violation_escalations_created'
+    )
+
+    class Meta:
+        db_table = 'violation_escalations'
+        ordering = ['violation', 'step_number']
+        indexes = [
+            models.Index(fields=['violation', 'step_number']),
+            models.Index(fields=['escalated_at']),
+        ]
+
+    def __str__(self):
+        return f"Violation {self.violation.id} - Step {self.step_number}"
+
+
+class ViolationFine(models.Model):
+    """
+    Fines posted for violations.
+
+    Links violations to invoices and journal entries.
+    """
+
+    STATUS_PENDING = 'PENDING'
+    STATUS_POSTED = 'POSTED'
+    STATUS_PAID = 'PAID'
+    STATUS_WAIVED = 'WAIVED'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_POSTED, 'Posted'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_WAIVED, 'Waived'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    violation = models.ForeignKey(
+        Violation,
+        on_delete=models.PROTECT,
+        related_name='fines'
+    )
+
+    escalation = models.ForeignKey(
+        ViolationEscalation,
+        on_delete=models.PROTECT,
+        related_name='fines',
+        null=True,
+        blank=True
+    )
+
+    invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.PROTECT,
+        related_name='violation_fines',
+        null=True,
+        blank=True,
+        help_text="Link to invoice (AR)"
+    )
+
+    journal_entry = models.ForeignKey(
+        JournalEntry,
+        on_delete=models.PROTECT,
+        related_name='violation_fines',
+        null=True,
+        blank=True,
+        help_text="Link to GL entry"
+    )
+
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        help_text="Fine amount"
+    )
+
+    posted_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date fine was posted to ledger"
+    )
+
+    paid_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date fine was paid"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING
+    )
+
+    waived_reason = models.TextField(
+        blank=True,
+        help_text="Reason fine was waived"
+    )
+
+    waived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='violation_fines_waived',
+        null=True,
+        blank=True
+    )
+
+    waived_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'violation_fines'
+        ordering = ['-posted_date']
+        indexes = [
+            models.Index(fields=['violation', 'status']),
+            models.Index(fields=['posted_date']),
+        ]
+
+    def __str__(self):
+        return f"Fine ${self.amount} for Violation {self.violation.id}"
+
+
+# ----------------------------------------------------------------------------
+# Sprint 16: ARC (Architectural Review Committee) Workflow
+# ----------------------------------------------------------------------------
+
+class ARCRequestType(models.Model):
+    """
+    Types of architectural modification requests.
+
+    Defines request categories (paint, fence, landscaping, etc.).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='arc_request_types'
+    )
+
+    code = models.CharField(
+        max_length=20,
+        help_text="Short code (e.g., 'PAINT', 'FENCE')"
+    )
+
+    name = models.CharField(
+        max_length=100,
+        help_text="Request type name"
+    )
+
+    description = models.TextField(
+        blank=True,
+        help_text="Description and guidelines"
+    )
+
+    requires_plans = models.BooleanField(
+        default=False,
+        help_text="Requires architectural plans?"
+    )
+
+    requires_contractor = models.BooleanField(
+        default=False,
+        help_text="Requires contractor information?"
+    )
+
+    typical_review_days = models.IntegerField(
+        default=30,
+        help_text="Typical review time in days"
+    )
+
+    is_active = models.BooleanField(
+        default=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'arc_request_types'
+        unique_together = [['tenant', 'code']]
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.code}: {self.name}"
+
+
+class ARCRequest(models.Model):
+    """
+    Architectural modification requests from owners.
+
+    Tracks requests from submission through completion.
+    """
+
+    STATUS_DRAFT = 'DRAFT'
+    STATUS_SUBMITTED = 'SUBMITTED'
+    STATUS_UNDER_REVIEW = 'UNDER_REVIEW'
+    STATUS_APPROVED = 'APPROVED'
+    STATUS_DENIED = 'DENIED'
+    STATUS_APPROVED_WITH_CONDITIONS = 'APPROVED_WITH_CONDITIONS'
+    STATUS_COMPLETED = 'COMPLETED'
+    STATUS_CANCELLED = 'CANCELLED'
+
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_SUBMITTED, 'Submitted'),
+        (STATUS_UNDER_REVIEW, 'Under Review'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_DENIED, 'Denied'),
+        (STATUS_APPROVED_WITH_CONDITIONS, 'Approved with Conditions'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_CANCELLED, 'Cancelled'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='arc_requests'
+    )
+
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name='arc_requests'
+    )
+
+    owner = models.ForeignKey(
+        Owner,
+        on_delete=models.PROTECT,
+        related_name='arc_requests'
+    )
+
+    request_type = models.ForeignKey(
+        ARCRequestType,
+        on_delete=models.PROTECT,
+        related_name='requests'
+    )
+
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT
+    )
+
+    title = models.CharField(
+        max_length=255,
+        help_text="Brief title"
+    )
+
+    description = models.TextField(
+        help_text="Detailed proposal"
+    )
+
+    requested_start_date = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    estimated_completion_date = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    contractor_name = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    contractor_license = models.CharField(
+        max_length=50,
+        blank=True
+    )
+
+    contractor_phone = models.CharField(
+        max_length=20,
+        blank=True
+    )
+
+    submitted_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    reviewed_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='arc_requests_created'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'arc_requests'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['unit']),
+            models.Index(fields=['owner']),
+            models.Index(fields=['submitted_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} - {self.unit.address}"
+
+
+class ARCDocument(models.Model):
+    """
+    Documents attached to ARC requests.
+
+    Plans, specs, photos, contracts, etc.
+    """
+
+    DOCUMENT_TYPE_PLAN = 'PLAN'
+    DOCUMENT_TYPE_SPEC = 'SPEC'
+    DOCUMENT_TYPE_PHOTO = 'PHOTO'
+    DOCUMENT_TYPE_CONTRACT = 'CONTRACT'
+    DOCUMENT_TYPE_OTHER = 'OTHER'
+
+    DOCUMENT_TYPE_CHOICES = [
+        (DOCUMENT_TYPE_PLAN, 'Plan'),
+        (DOCUMENT_TYPE_SPEC, 'Specification'),
+        (DOCUMENT_TYPE_PHOTO, 'Photo'),
+        (DOCUMENT_TYPE_CONTRACT, 'Contract'),
+        (DOCUMENT_TYPE_OTHER, 'Other'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    request = models.ForeignKey(
+        ARCRequest,
+        on_delete=models.CASCADE,
+        related_name='documents'
+    )
+
+    document_type = models.CharField(
+        max_length=20,
+        choices=DOCUMENT_TYPE_CHOICES
+    )
+
+    file_url = models.URLField(
+        max_length=500,
+        help_text="S3 path or local storage path"
+    )
+
+    file_name = models.CharField(
+        max_length=255
+    )
+
+    file_size = models.IntegerField(
+        help_text="File size in bytes"
+    )
+
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='arc_documents_uploaded'
+    )
+
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'arc_documents'
+        ordering = ['request', 'uploaded_at']
+        indexes = [
+            models.Index(fields=['request']),
+        ]
+
+    def __str__(self):
+        return f"{self.file_name} ({self.document_type})"
+
+
+class ARCReview(models.Model):
+    """
+    Committee member reviews for ARC requests.
+
+    Tracks individual review decisions.
+    """
+
+    DECISION_APPROVE = 'APPROVE'
+    DECISION_DENY = 'DENY'
+    DECISION_REQUEST_CHANGES = 'REQUEST_CHANGES'
+    DECISION_ABSTAIN = 'ABSTAIN'
+
+    DECISION_CHOICES = [
+        (DECISION_APPROVE, 'Approve'),
+        (DECISION_DENY, 'Deny'),
+        (DECISION_REQUEST_CHANGES, 'Request Changes'),
+        (DECISION_ABSTAIN, 'Abstain'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    request = models.ForeignKey(
+        ARCRequest,
+        on_delete=models.CASCADE,
+        related_name='reviews'
+    )
+
+    reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='arc_reviews'
+    )
+
+    review_date = models.DateTimeField(auto_now_add=True)
+
+    decision = models.CharField(
+        max_length=20,
+        choices=DECISION_CHOICES
+    )
+
+    comments = models.TextField(
+        blank=True,
+        help_text="Review comments"
+    )
+
+    conditions = models.TextField(
+        blank=True,
+        help_text="Conditions for approval"
+    )
+
+    class Meta:
+        db_table = 'arc_reviews'
+        ordering = ['request', 'review_date']
+        indexes = [
+            models.Index(fields=['request']),
+            models.Index(fields=['reviewer']),
+        ]
+
+    def __str__(self):
+        return f"Review by {self.reviewer.username} - {self.decision}"
+
+
+class ARCApproval(models.Model):
+    """
+    Final approval for ARC requests.
+
+    Records board decision and conditions.
+    """
+
+    DECISION_APPROVED = 'APPROVED'
+    DECISION_DENIED = 'DENIED'
+    DECISION_APPROVED_WITH_CONDITIONS = 'APPROVED_WITH_CONDITIONS'
+
+    DECISION_CHOICES = [
+        (DECISION_APPROVED, 'Approved'),
+        (DECISION_DENIED, 'Denied'),
+        (DECISION_APPROVED_WITH_CONDITIONS, 'Approved with Conditions'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    request = models.OneToOneField(
+        ARCRequest,
+        on_delete=models.CASCADE,
+        related_name='approval'
+    )
+
+    final_decision = models.CharField(
+        max_length=30,
+        choices=DECISION_CHOICES
+    )
+
+    decision_date = models.DateField()
+
+    conditions = models.TextField(
+        blank=True,
+        help_text="Approval conditions"
+    )
+
+    expiration_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Approval expires if not started"
+    )
+
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='arc_approvals'
+    )
+
+    board_resolution = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Board resolution number"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'arc_approvals'
+        indexes = [
+            models.Index(fields=['request']),
+            models.Index(fields=['decision_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.final_decision} - {self.request.title}"
+
+
+class ARCCompletion(models.Model):
+    """
+    Completion verification for ARC requests.
+
+    Inspector verifies work matches approval.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    request = models.OneToOneField(
+        ARCRequest,
+        on_delete=models.CASCADE,
+        related_name='completion'
+    )
+
+    inspected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='arc_completions_inspected'
+    )
+
+    inspection_date = models.DateField()
+
+    complies_with_approval = models.BooleanField(
+        help_text="Does work comply with approval?"
+    )
+
+    inspector_notes = models.TextField(
+        blank=True
+    )
+
+    photo_url = models.URLField(
+        max_length=500,
+        blank=True,
+        help_text="Completion photo"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'arc_completions'
+        indexes = [
+            models.Index(fields=['request']),
+            models.Index(fields=['inspection_date']),
+        ]
+
+    def __str__(self):
+        return f"Completion for {self.request.title}"
+
+
+# ----------------------------------------------------------------------------
+# Sprint 17: Work Order System with Vendor Management
+# ----------------------------------------------------------------------------
+
+class WorkOrderCategory(models.Model):
+    """
+    Work order categories (landscaping, pool, HVAC, etc.).
+
+    Maps categories to GL accounts.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='work_order_categories'
+    )
+
+    code = models.CharField(
+        max_length=20,
+        help_text="Short code (e.g., 'LAND', 'POOL')"
+    )
+
+    name = models.CharField(
+        max_length=100,
+        help_text="Category name"
+    )
+
+    description = models.TextField(
+        blank=True
+    )
+
+    default_gl_account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name='work_order_categories',
+        null=True,
+        blank=True,
+        help_text="Default GL expense account"
+    )
+
+    is_active = models.BooleanField(
+        default=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'work_order_categories'
+        unique_together = [['tenant', 'code']]
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.code}: {self.name}"
+
+
+class Vendor(models.Model):
+    """
+    Vendor directory for work orders.
+
+    Tracks contractors, service providers, and suppliers.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='vendors'
+    )
+
+    name = models.CharField(
+        max_length=200,
+        help_text="Company name"
+    )
+
+    contact_name = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    phone = models.CharField(
+        max_length=20,
+        blank=True
+    )
+
+    email = models.EmailField(
+        blank=True
+    )
+
+    address = models.TextField(
+        blank=True
+    )
+
+    tax_id = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="EIN for 1099 reporting"
+    )
+
+    license_number = models.CharField(
+        max_length=50,
+        blank=True
+    )
+
+    insurance_expiration = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    payment_terms = models.CharField(
+        max_length=50,
+        default='Net 30',
+        help_text="Payment terms"
+    )
+
+    specialty = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Vendor specialty/category"
+    )
+
+    is_active = models.BooleanField(
+        default=True
+    )
+
+    notes = models.TextField(
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'vendors'
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['tenant', 'is_active']),
+            models.Index(fields=['specialty']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class WorkOrder(models.Model):
+    """
+    Work orders for maintenance and repairs.
+
+    Tracks requests from creation through completion.
+    """
+
+    PRIORITY_EMERGENCY = 'EMERGENCY'
+    PRIORITY_HIGH = 'HIGH'
+    PRIORITY_MEDIUM = 'MEDIUM'
+    PRIORITY_LOW = 'LOW'
+
+    PRIORITY_CHOICES = [
+        (PRIORITY_EMERGENCY, 'Emergency'),
+        (PRIORITY_HIGH, 'High'),
+        (PRIORITY_MEDIUM, 'Medium'),
+        (PRIORITY_LOW, 'Low'),
+    ]
+
+    STATUS_DRAFT = 'DRAFT'
+    STATUS_OPEN = 'OPEN'
+    STATUS_ASSIGNED = 'ASSIGNED'
+    STATUS_IN_PROGRESS = 'IN_PROGRESS'
+    STATUS_COMPLETED = 'COMPLETED'
+    STATUS_CLOSED = 'CLOSED'
+    STATUS_CANCELLED = 'CANCELLED'
+
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_OPEN, 'Open'),
+        (STATUS_ASSIGNED, 'Assigned'),
+        (STATUS_IN_PROGRESS, 'In Progress'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_CLOSED, 'Closed'),
+        (STATUS_CANCELLED, 'Cancelled'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='work_orders'
+    )
+
+    work_order_number = models.CharField(
+        max_length=50,
+        help_text="Auto-generated number (e.g., WO-2025-001)"
+    )
+
+    category = models.ForeignKey(
+        WorkOrderCategory,
+        on_delete=models.PROTECT,
+        related_name='work_orders'
+    )
+
+    title = models.CharField(
+        max_length=255
+    )
+
+    description = models.TextField()
+
+    priority = models.CharField(
+        max_length=20,
+        choices=PRIORITY_CHOICES,
+        default=PRIORITY_MEDIUM
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT
+    )
+
+    location = models.CharField(
+        max_length=255,
+        help_text="Unit number or common area"
+    )
+
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name='work_orders',
+        null=True,
+        blank=True
+    )
+
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='work_orders_requested'
+    )
+
+    assigned_to_vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.PROTECT,
+        related_name='work_orders',
+        null=True,
+        blank=True
+    )
+
+    assigned_to_staff = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='work_orders_assigned',
+        null=True,
+        blank=True
+    )
+
+    estimated_cost = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    actual_cost = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    gl_account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name='work_orders',
+        null=True,
+        blank=True,
+        help_text="GL expense account"
+    )
+
+    fund = models.ForeignKey(
+        Fund,
+        on_delete=models.PROTECT,
+        related_name='work_orders',
+        null=True,
+        blank=True
+    )
+
+    requested_date = models.DateField()
+
+    scheduled_date = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    completed_date = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='work_orders_created'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'work_orders'
+        unique_together = [['tenant', 'work_order_number']]
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['category']),
+            models.Index(fields=['assigned_to_vendor']),
+            models.Index(fields=['requested_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.work_order_number}: {self.title}"
+
+
+class WorkOrderComment(models.Model):
+    """
+    Comments on work orders.
+
+    Tracks communication about work orders.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    work_order = models.ForeignKey(
+        WorkOrder,
+        on_delete=models.CASCADE,
+        related_name='comments'
+    )
+
+    comment = models.TextField()
+
+    commented_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='work_order_comments'
+    )
+
+    commented_at = models.DateTimeField(auto_now_add=True)
+
+    is_internal = models.BooleanField(
+        default=False,
+        help_text="Visible to staff only?"
+    )
+
+    class Meta:
+        db_table = 'work_order_comments'
+        ordering = ['work_order', 'commented_at']
+        indexes = [
+            models.Index(fields=['work_order', 'commented_at']),
+        ]
+
+    def __str__(self):
+        return f"Comment on {self.work_order.work_order_number}"
+
+
+class WorkOrderAttachment(models.Model):
+    """
+    File attachments for work orders.
+
+    Photos, documents, etc.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    work_order = models.ForeignKey(
+        WorkOrder,
+        on_delete=models.CASCADE,
+        related_name='attachments'
+    )
+
+    file_url = models.URLField(
+        max_length=500
+    )
+
+    file_name = models.CharField(
+        max_length=255
+    )
+
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='work_order_attachments_uploaded'
+    )
+
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'work_order_attachments'
+        ordering = ['work_order', 'uploaded_at']
+        indexes = [
+            models.Index(fields=['work_order']),
+        ]
+
+    def __str__(self):
+        return f"{self.file_name}"
+
+
+class WorkOrderInvoice(models.Model):
+    """
+    Vendor invoices for work orders.
+
+    Links work orders to invoices and GL entries.
+    """
+
+    STATUS_PENDING = 'PENDING'
+    STATUS_APPROVED = 'APPROVED'
+    STATUS_PAID = 'PAID'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_PAID, 'Paid'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    work_order = models.ForeignKey(
+        WorkOrder,
+        on_delete=models.PROTECT,
+        related_name='invoices'
+    )
+
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.PROTECT,
+        related_name='invoices'
+    )
+
+    invoice_number = models.CharField(
+        max_length=100
+    )
+
+    invoice_date = models.DateField()
+
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2
+    )
+
+    payment_status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING
+    )
+
+    journal_entry = models.ForeignKey(
+        JournalEntry,
+        on_delete=models.PROTECT,
+        related_name='work_order_invoices',
+        null=True,
+        blank=True
+    )
+
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='work_order_invoices_approved',
+        null=True,
+        blank=True
+    )
+
+    approved_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'work_order_invoices'
+        unique_together = [['vendor', 'invoice_number']]
+        ordering = ['-invoice_date']
+        indexes = [
+            models.Index(fields=['work_order']),
+            models.Index(fields=['vendor']),
+            models.Index(fields=['payment_status']),
+        ]
+
+    def __str__(self):
+        return f"Invoice {self.invoice_number} - {self.vendor.name}"

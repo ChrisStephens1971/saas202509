@@ -1,7 +1,17 @@
 from django.contrib import admin
 from .models import (
     Fund, AccountType, Account, JournalEntry, JournalEntryLine,
-    Owner, Unit, Ownership, Invoice, InvoiceLine, Payment, PaymentApplication
+    Owner, Unit, Ownership, Invoice, InvoiceLine, Payment, PaymentApplication,
+    # Phase 3: Violation Tracking
+    ViolationType, FineSchedule, Violation, ViolationEscalation, ViolationFine,
+    # Phase 3: ARC Workflow
+    ARCRequestType, ARCRequest, ARCDocument, ARCReview, ARCApproval, ARCCompletion,
+    # Phase 3: Work Orders
+    WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice,
+    # Phase 3: Reserve Planning (already existed)
+    ReserveStudy, ReserveComponent, ReserveScenario,
+    # Phase 3: Budget (already existed)
+    Budget, BudgetLine
 )
 
 
@@ -304,3 +314,203 @@ class PaymentApplicationAdmin(admin.ModelAdmin):
     list_filter = ['payment__tenant', 'applied_at']
     search_fields = ['payment__payment_number', 'invoice__invoice_number']
     readonly_fields = ['id', 'applied_at']
+
+
+# ============================================================================
+# PHASE 3: OPERATIONAL FEATURES - Admin Registrations
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Sprint 15: Violation Tracking
+# ----------------------------------------------------------------------------
+
+@admin.register(ViolationType)
+class ViolationTypeAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'category', 'tenant', 'is_active']
+    list_filter = ['category', 'is_active', 'tenant']
+    search_fields = ['code', 'name', 'category']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(FineSchedule)
+class FineScheduleAdmin(admin.ModelAdmin):
+    list_display = ['violation_type', 'step_number', 'step_name', 'fine_amount', 'days_after_previous']
+    list_filter = ['violation_type', 'requires_board_approval']
+    search_fields = ['violation_type__code', 'step_name']
+    readonly_fields = ['id', 'created_at']
+
+
+@admin.register(Violation)
+class ViolationAdmin(admin.ModelAdmin):
+    list_display = ['unit', 'owner', 'violation_type', 'status', 'discovered_date', 'cured_date', 'tenant']
+    list_filter = ['status', 'tenant', 'discovered_date']
+    search_fields = ['unit__unit_number', 'owner__last_name', 'description']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(ViolationEscalation)
+class ViolationEscalationAdmin(admin.ModelAdmin):
+    list_display = ['violation', 'step_number', 'step_name', 'fine_amount', 'escalated_at', 'notice_sent']
+    list_filter = ['step_name', 'notice_sent', 'escalated_at']
+    search_fields = ['violation__id', 'tracking_number']
+    readonly_fields = ['id', 'escalated_at']
+
+
+@admin.register(ViolationFine)
+class ViolationFineAdmin(admin.ModelAdmin):
+    list_display = ['violation', 'amount', 'status', 'posted_date', 'paid_date']
+    list_filter = ['status', 'posted_date']
+    search_fields = ['violation__id', 'invoice__invoice_number']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+# ----------------------------------------------------------------------------
+# Sprint 16: ARC Workflow
+# ----------------------------------------------------------------------------
+
+@admin.register(ARCRequestType)
+class ARCRequestTypeAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'requires_plans', 'requires_contractor', 'typical_review_days', 'is_active']
+    list_filter = ['requires_plans', 'requires_contractor', 'is_active']
+    search_fields = ['code', 'name']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(ARCRequest)
+class ARCRequestAdmin(admin.ModelAdmin):
+    list_display = ['title', 'unit', 'owner', 'request_type', 'status', 'submitted_at', 'tenant']
+    list_filter = ['status', 'request_type', 'tenant', 'submitted_at']
+    search_fields = ['title', 'unit__unit_number', 'owner__last_name', 'description']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(ARCDocument)
+class ARCDocumentAdmin(admin.ModelAdmin):
+    list_display = ['request', 'document_type', 'file_name', 'file_size', 'uploaded_at']
+    list_filter = ['document_type', 'uploaded_at']
+    search_fields = ['request__title', 'file_name']
+    readonly_fields = ['id', 'uploaded_at']
+
+
+@admin.register(ARCReview)
+class ARCReviewAdmin(admin.ModelAdmin):
+    list_display = ['request', 'reviewer', 'decision', 'review_date']
+    list_filter = ['decision', 'review_date']
+    search_fields = ['request__title', 'reviewer__username', 'comments']
+    readonly_fields = ['id', 'review_date']
+
+
+@admin.register(ARCApproval)
+class ARCApprovalAdmin(admin.ModelAdmin):
+    list_display = ['request', 'final_decision', 'decision_date', 'approved_by', 'expiration_date']
+    list_filter = ['final_decision', 'decision_date']
+    search_fields = ['request__title', 'board_resolution']
+    readonly_fields = ['id', 'created_at']
+
+
+@admin.register(ARCCompletion)
+class ARCCompletionAdmin(admin.ModelAdmin):
+    list_display = ['request', 'inspection_date', 'complies_with_approval', 'inspected_by']
+    list_filter = ['complies_with_approval', 'inspection_date']
+    search_fields = ['request__title', 'inspector_notes']
+    readonly_fields = ['id', 'created_at']
+
+
+# ----------------------------------------------------------------------------
+# Sprint 17: Work Order System
+# ----------------------------------------------------------------------------
+
+@admin.register(WorkOrderCategory)
+class WorkOrderCategoryAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'default_gl_account', 'tenant', 'is_active']
+    list_filter = ['is_active', 'tenant']
+    search_fields = ['code', 'name']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(Vendor)
+class VendorAdmin(admin.ModelAdmin):
+    list_display = ['name', 'contact_name', 'phone', 'email', 'specialty', 'is_active', 'tenant']
+    list_filter = ['specialty', 'is_active', 'tenant']
+    search_fields = ['name', 'contact_name', 'email', 'license_number']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(WorkOrder)
+class WorkOrderAdmin(admin.ModelAdmin):
+    list_display = ['work_order_number', 'title', 'category', 'priority', 'status', 'assigned_to_vendor', 'requested_date']
+    list_filter = ['priority', 'status', 'category', 'tenant', 'requested_date']
+    search_fields = ['work_order_number', 'title', 'description', 'location']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(WorkOrderComment)
+class WorkOrderCommentAdmin(admin.ModelAdmin):
+    list_display = ['work_order', 'commented_by', 'commented_at', 'is_internal']
+    list_filter = ['is_internal', 'commented_at']
+    search_fields = ['work_order__work_order_number', 'comment']
+    readonly_fields = ['id', 'commented_at']
+
+
+@admin.register(WorkOrderAttachment)
+class WorkOrderAttachmentAdmin(admin.ModelAdmin):
+    list_display = ['work_order', 'file_name', 'uploaded_by', 'uploaded_at']
+    list_filter = ['uploaded_at']
+    search_fields = ['work_order__work_order_number', 'file_name']
+    readonly_fields = ['id', 'uploaded_at']
+
+
+@admin.register(WorkOrderInvoice)
+class WorkOrderInvoiceAdmin(admin.ModelAdmin):
+    list_display = ['work_order', 'vendor', 'invoice_number', 'invoice_date', 'amount', 'payment_status']
+    list_filter = ['payment_status', 'vendor', 'invoice_date']
+    search_fields = ['invoice_number', 'work_order__work_order_number', 'vendor__name']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+# ----------------------------------------------------------------------------
+# Sprint 14: Reserve Planning (models already existed)
+# ----------------------------------------------------------------------------
+
+@admin.register(ReserveStudy)
+class ReserveStudyAdmin(admin.ModelAdmin):
+    list_display = ['name', 'study_date', 'horizon_years', 'current_reserve_balance', 'tenant']
+    list_filter = ['study_date', 'tenant']
+    search_fields = ['name', 'notes']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(ReserveComponent)
+class ReserveComponentAdmin(admin.ModelAdmin):
+    list_display = ['name', 'study', 'useful_life_years', 'remaining_life_years', 'replacement_cost', 'category']
+    list_filter = ['category', 'study']
+    search_fields = ['name', 'description']
+    readonly_fields = ['id', 'inflation_adjusted_cost', 'created_at', 'updated_at']
+
+
+@admin.register(ReserveScenario)
+class ReserveScenarioAdmin(admin.ModelAdmin):
+    list_display = ['name', 'study', 'monthly_contribution', 'one_time_contribution']
+    list_filter = ['study']
+    search_fields = ['name', 'notes']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+# ----------------------------------------------------------------------------
+# Sprint 18: Budget Tracking (models already existed)
+# ----------------------------------------------------------------------------
+
+@admin.register(Budget)
+class BudgetAdmin(admin.ModelAdmin):
+    list_display = ['fiscal_year', 'tenant', 'start_date', 'end_date', 'status']
+    list_filter = ['fiscal_year', 'status', 'tenant']
+    search_fields = ['notes']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(BudgetLine)
+class BudgetLineAdmin(admin.ModelAdmin):
+    list_display = ['budget', 'fund', 'gl_account', 'category', 'annual_amount', 'monthly_amount']
+    list_filter = ['category', 'fund', 'budget']
+    search_fields = ['gl_account__account_number', 'gl_account__name', 'notes']
+    readonly_fields = ['id']
