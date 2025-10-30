@@ -7,7 +7,7 @@
     "hasGreeted": true,
     "setupComplete": true,
     "currentSprint": null,
-    "phase": "development",
+    "phase": "phase-3-planning-complete",
     "completedSprints": [
       "sprint-01-accounting-foundation",
       "sprint-02-tenant-management",
@@ -21,7 +21,15 @@
       "sprint-10-frontend-enhancement",
       "sprint-11-dashboard-enhancement",
       "sprint-12-bank-reconciliation"
-    ]
+    ],
+    "plannedSprints": [
+      "sprint-14-reserve-planning",
+      "sprint-15-violation-tracking",
+      "sprint-16-arc-workflow",
+      "sprint-17-work-order-system",
+      "sprint-18-budget-tracking"
+    ],
+    "phase3PlanningCompletedDate": "2025-10-29"
   },
   "metadata": {
     "tradeName": "TBD",
