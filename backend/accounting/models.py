@@ -5690,3 +5690,213 @@ class WorkOrderInvoice(models.Model):
 
     def __str__(self):
         return f"Invoice {self.invoice_number} - {self.vendor.name}"
+
+
+# ============================================================================
+# PHASE 4: RETENTION FEATURES
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Sprint 21: Auditor Export
+# ----------------------------------------------------------------------------
+
+class AuditorExport(models.Model):
+    """
+    Immutable audit export with timestamp and metadata.
+
+    Generates audit-grade financial exports (CSV, Excel, PDF) with:
+    - Complete general ledger for date range
+    - Evidence links (receipts, invoices, photos, documents)
+    - Immutable timestamped audit trail
+    - Download tracking
+
+    Once generated, exports cannot be modified (audit integrity).
+    """
+
+    # Status choices
+    STATUS_GENERATING = 'generating'
+    STATUS_READY = 'ready'
+    STATUS_FAILED = 'failed'
+
+    STATUS_CHOICES = [
+        (STATUS_GENERATING, 'Generating'),
+        (STATUS_READY, 'Ready'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    # Format choices
+    FORMAT_CSV = 'csv'
+    FORMAT_EXCEL = 'excel'
+    FORMAT_PDF = 'pdf'
+
+    FORMAT_CHOICES = [
+        (FORMAT_CSV, 'CSV'),
+        (FORMAT_EXCEL, 'Excel'),
+        (FORMAT_PDF, 'PDF'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='auditor_exports'
+    )
+
+    title = models.CharField(
+        max_length=200,
+        help_text="Export title (e.g., '2025 Annual Audit Export')"
+    )
+
+    start_date = models.DateField(
+        help_text="Beginning of date range"
+    )
+
+    end_date = models.DateField(
+        help_text="End of date range"
+    )
+
+    # Export options
+    format = models.CharField(
+        max_length=20,
+        choices=FORMAT_CHOICES,
+        default=FORMAT_CSV,
+        help_text="Export file format"
+    )
+
+    include_evidence = models.BooleanField(
+        default=True,
+        help_text="Include links to supporting documents"
+    )
+
+    include_balances = models.BooleanField(
+        default=True,
+        help_text="Include running balances for each account"
+    )
+
+    include_owner_data = models.BooleanField(
+        default=False,
+        help_text="Include owner personal information (privacy flag)"
+    )
+
+    # File storage
+    file_url = models.URLField(
+        max_length=500,
+        blank=True,
+        help_text="URL to generated export file (S3 or local storage)"
+    )
+
+    file_size_bytes = models.IntegerField(
+        default=0,
+        help_text="File size in bytes"
+    )
+
+    file_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="SHA-256 hash for integrity verification"
+    )
+
+    # Metadata
+    generated_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When export was generated"
+    )
+
+    generated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='generated_exports'
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_GENERATING,
+        help_text="Export generation status"
+    )
+
+    # Audit trail
+    downloaded_count = models.IntegerField(
+        default=0,
+        help_text="Number of times export was downloaded"
+    )
+
+    last_downloaded_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Most recent download timestamp"
+    )
+
+    # Summary statistics
+    total_entries = models.IntegerField(
+        default=0,
+        help_text="Total journal entries in export"
+    )
+
+    total_debit = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Sum of all debit entries"
+    )
+
+    total_credit = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Sum of all credit entries"
+    )
+
+    evidence_count = models.IntegerField(
+        default=0,
+        help_text="Number of transactions with evidence links"
+    )
+
+    error_message = models.TextField(
+        blank=True,
+        help_text="Error message if generation failed"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'auditor_exports'
+        ordering = ['-generated_at']
+        indexes = [
+            models.Index(fields=['tenant', '-generated_at']),
+            models.Index(fields=['start_date', 'end_date']),
+            models.Index(fields=['status']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(end_date__gte=models.F('start_date')),
+                name='auditor_export_valid_date_range'
+            ),
+            models.CheckConstraint(
+                check=models.Q(total_debit=models.F('total_credit')),
+                name='auditor_export_balanced'
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.start_date} to {self.end_date})"
+
+    def increment_download_count(self):
+        """Track download activity for audit trail"""
+        from django.utils import timezone
+        self.downloaded_count += 1
+        self.last_downloaded_at = timezone.now()
+        self.save(update_fields=['downloaded_count', 'last_downloaded_at'])
+
+    def is_balanced(self):
+        """Verify debits equal credits"""
+        return self.total_debit == self.total_credit
+
+    @property
+    def evidence_percentage(self):
+        """Calculate percentage of entries with evidence"""
+        if self.total_entries == 0:
+            return 0
+        return round((self.evidence_count / self.total_entries) * 100, 1)

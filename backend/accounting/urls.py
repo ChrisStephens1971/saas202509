@@ -21,6 +21,8 @@ from .api_views import (
     # Phase 3 Sprint 17: Work Orders
     WorkOrderCategoryViewSet, VendorViewSet, WorkOrderViewSet, WorkOrderCommentViewSet,
     WorkOrderAttachmentViewSet, WorkOrderInvoiceViewSet,
+    # Phase 4: Retention Features
+    AuditorExportViewSet,
     ar_aging_report, owner_ledger, dashboard_metrics, trial_balance
 )
 
@@ -62,6 +64,10 @@ router.register(r'violation-hearings', ViolationHearingViewSet, basename='violat
 router.register(r'board-packet-templates', BoardPacketTemplateViewSet, basename='board-packet-template')
 router.register(r'board-packets', BoardPacketViewSet, basename='board-packet')
 router.register(r'packet-sections', PacketSectionViewSet, basename='packet-section')
+
+# Phase 4: Retention Features
+# Sprint 21: Auditor Export
+router.register(r'auditor-exports', AuditorExportViewSet, basename='auditor-export')
 
 # Phase 3 Sprint 15: Violation Tracking (New Models)
 router.register(r'violation-types', ViolationTypeViewSet, basename='violation-type')

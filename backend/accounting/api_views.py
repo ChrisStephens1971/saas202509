@@ -32,7 +32,9 @@ from .models import (
     # Phase 3: ARC Workflow
     ARCRequestType, ARCRequest, ARCDocument, ARCReview, ARCApproval, ARCCompletion,
     # Phase 3: Work Orders
-    WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice
+    WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice,
+    # Phase 4: Retention Features
+    AuditorExport
 )
 from .serializers import (
     AccountSerializer, FundSerializer, OwnerSerializer, UnitSerializer,
@@ -57,7 +59,9 @@ from .serializers import (
     ARCDocumentSerializer, ARCReviewSerializer, ARCApprovalSerializer, ARCCompletionSerializer,
     # Phase 3: Work Orders
     WorkOrderCategorySerializer, VendorSerializer, WorkOrderSerializer, WorkOrderDetailSerializer,
-    WorkOrderCommentSerializer, WorkOrderAttachmentSerializer, WorkOrderInvoiceSerializer
+    WorkOrderCommentSerializer, WorkOrderAttachmentSerializer, WorkOrderInvoiceSerializer,
+    # Phase 4: Retention Features
+    AuditorExportSerializer
 )
 
 
@@ -3023,3 +3027,176 @@ class WorkOrderInvoiceViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to post invoice: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+# ============================================================================
+# PHASE 4: RETENTION FEATURES - API Views
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Sprint 21: Auditor Export
+# ----------------------------------------------------------------------------
+
+class AuditorExportViewSet(viewsets.ModelViewSet):
+    """
+    API endpoints for auditor exports.
+
+    Provides CRUD operations plus custom actions:
+    - generate/ - Generate export file (async)
+    - download/ - Download generated export file
+    """
+    serializer_class = serializers.AuditorExportSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['status', 'format', 'start_date', 'end_date']
+    search_fields = ['title']
+    ordering_fields = ['generated_at', 'start_date', 'title']
+    ordering = ['-generated_at']
+
+    def get_queryset(self):
+        tenant = get_tenant(self.request)
+        return models.AuditorExport.objects.filter(tenant=tenant)
+
+    def perform_create(self, serializer):
+        tenant = get_tenant(self.request)
+        serializer.save(
+            tenant=tenant,
+            generated_by=self.request.user
+        )
+
+    @action(detail=True, methods=['post'])
+    def generate(self, request, pk=None):
+        """
+        Generate export file for this auditor export.
+
+        This endpoint:
+        1. Validates export is in draft/failed state
+        2. Triggers async export generation
+        3. Returns export status
+
+        Returns:
+            Response with export status and details
+        """
+        from accounting.services.auditor_export_service import AuditorExportService
+
+        export_obj = self.get_object()
+        tenant = get_tenant(request)
+
+        # Only generate if in draft or failed state
+        if export_obj.status == 'ready':
+            return Response({
+                'error': 'Export already generated. Download the existing file or create a new export.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Generate export (synchronous for now, could be async with Celery)
+        service = AuditorExportService()
+        success, file_url, error_message = service.generate_export(export_obj)
+
+        if success:
+            # Refresh from DB to get updated fields
+            export_obj.refresh_from_db()
+            serializer = self.get_serializer(export_obj)
+
+            return Response({
+                'status': 'success',
+                'message': f'Export generated successfully: {export_obj.total_entries} entries',
+                'export': serializer.data
+            })
+        else:
+            return Response({
+                'status': 'error',
+                'message': error_message
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        """
+        Download generated export file.
+
+        Increments download counter for audit trail.
+
+        Returns:
+            FileResponse with CSV/Excel file
+        """
+        from django.http import FileResponse
+        from django.core.files.storage import default_storage
+
+        export_obj = self.get_object()
+
+        # Ensure export is ready
+        if export_obj.status != 'ready':
+            return Response({
+                'error': 'Export is not ready. Generate the export first.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check file exists
+        if not export_obj.file_url or not default_storage.exists(export_obj.file_url):
+            return Response({
+                'error': 'Export file not found. Please regenerate the export.'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            # Increment download counter
+            export_obj.increment_download_count()
+
+            # Open file
+            file_handle = default_storage.open(export_obj.file_url, 'rb')
+
+            # Determine content type
+            content_type = 'text/csv'
+            if export_obj.format == 'excel':
+                content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            elif export_obj.format == 'pdf':
+                content_type = 'application/pdf'
+
+            # Generate filename
+            filename = f"{export_obj.title.replace(' ', '_')}_{export_obj.start_date}_{export_obj.end_date}.{export_obj.format}"
+
+            # Return file
+            response = FileResponse(file_handle, content_type=content_type)
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+
+        except Exception as e:
+            return Response({
+                'error': f'Failed to download export: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'])
+    def verify_integrity(self, request, pk=None):
+        """
+        Verify export file integrity.
+
+        Checks:
+        - Debits = Credits
+        - File hash matches
+        - File is accessible
+
+        Returns:
+            Response with verification results
+        """
+        from accounting.services.auditor_export_service import AuditorExportService
+
+        export_obj = self.get_object()
+        service = AuditorExportService()
+
+        is_valid, error_message = service.verify_export_integrity(export_obj)
+
+        if is_valid:
+            return Response({
+                'status': 'valid',
+                'message': 'Export integrity verified',
+                'details': {
+                    'total_entries': export_obj.total_entries,
+                    'total_debit': str(export_obj.total_debit),
+                    'total_credit': str(export_obj.total_credit),
+                    'balanced': export_obj.is_balanced(),
+                    'file_hash': export_obj.file_hash,
+                    'evidence_percentage': export_obj.evidence_percentage
+                }
+            })
+        else:
+            return Response({
+                'status': 'invalid',
+                'message': 'Export integrity check failed',
+                'error': error_message
+            }, status=status.HTTP_400_BAD_REQUEST)

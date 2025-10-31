@@ -19,7 +19,9 @@ from .models import (
     # Phase 3: ARC Workflow
     ARCRequestType, ARCRequest, ARCDocument, ARCReview, ARCApproval, ARCCompletion,
     # Phase 3: Work Orders
-    WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice
+    WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice,
+    # Phase 4: Retention Features
+    AuditorExport
 )
 
 
@@ -1104,3 +1106,58 @@ class WorkOrderDetailSerializer(serializers.ModelSerializer):
 
     def get_requested_by_name(self, obj):
         return f"{obj.requested_by.first_name} {obj.requested_by.last_name}" if obj.requested_by else None
+
+
+# ============================================================================
+# PHASE 4: RETENTION FEATURES - Serializers
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Sprint 21: Auditor Export
+# ----------------------------------------------------------------------------
+
+class AuditorExportSerializer(serializers.ModelSerializer):
+    """
+    Serializer for auditor exports.
+
+    Includes computed fields for evidence percentage and balance status.
+    """
+    generated_by_name = serializers.SerializerMethodField()
+    format_display = serializers.CharField(source='get_format_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    evidence_percentage = serializers.ReadOnlyField()
+    is_balanced = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditorExport
+        fields = [
+            'id', 'tenant', 'title', 'start_date', 'end_date',
+            'format', 'format_display',
+            'include_evidence', 'include_balances', 'include_owner_data',
+            'file_url', 'file_size_bytes', 'file_hash',
+            'generated_at', 'generated_by', 'generated_by_name',
+            'status', 'status_display',
+            'downloaded_count', 'last_downloaded_at',
+            'total_entries', 'total_debit', 'total_credit',
+            'evidence_count', 'evidence_percentage',
+            'is_balanced', 'error_message',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'file_url', 'file_size_bytes', 'file_hash',
+            'generated_at', 'generated_by', 'status',
+            'downloaded_count', 'last_downloaded_at',
+            'total_entries', 'total_debit', 'total_credit',
+            'evidence_count', 'error_message',
+            'created_at', 'updated_at'
+        ]
+
+    def get_generated_by_name(self, obj):
+        """Get full name of user who generated export"""
+        if obj.generated_by:
+            return f"{obj.generated_by.first_name} {obj.generated_by.last_name}"
+        return None
+
+    def get_is_balanced(self, obj):
+        """Check if export debits equal credits"""
+        return obj.is_balanced()
