@@ -21,7 +21,7 @@ from .models import (
     # Phase 3: Work Orders
     WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice,
     # Phase 4: Retention Features
-    AuditorExport
+    AuditorExport, ResaleDisclosure
 )
 
 
@@ -1161,3 +1161,62 @@ class AuditorExportSerializer(serializers.ModelSerializer):
     def get_is_balanced(self, obj):
         """Check if export debits equal credits"""
         return obj.is_balanced()
+
+
+# ----------------------------------------------------------------------------
+# Sprint 22: Resale Disclosure Packages
+# ----------------------------------------------------------------------------
+
+class ResaleDisclosureSerializer(serializers.ModelSerializer):
+    """
+    Serializer for resale disclosure packages.
+
+    Includes computed fields for state display name and delivery status.
+    """
+    unit_number = serializers.CharField(source='unit.unit_number', read_only=True)
+    owner_name = serializers.SerializerMethodField()
+    requested_by_name = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    state_display_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ResaleDisclosure
+        fields = [
+            'id', 'tenant', 'unit', 'unit_number', 'owner', 'owner_name',
+            'requested_by', 'requested_by_name', 'requested_at',
+            'buyer_name', 'escrow_agent', 'escrow_company',
+            'contact_email', 'contact_phone',
+            'state', 'state_display_name', 'template_version',
+            'status', 'status_display',
+            'pdf_url', 'pdf_size_bytes', 'pdf_hash', 'page_count',
+            'generated_at', 'delivered_at',
+            'current_balance', 'monthly_dues', 'special_assessments',
+            'has_lien', 'has_violations', 'violation_count',
+            'fee_amount', 'invoice', 'payment_status',
+            'notes', 'error_message',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'requested_at', 'generated_at', 'delivered_at',
+            'pdf_url', 'pdf_size_bytes', 'pdf_hash', 'page_count',
+            'current_balance', 'monthly_dues', 'special_assessments',
+            'has_lien', 'has_violations', 'violation_count',
+            'invoice', 'error_message',
+            'created_at', 'updated_at'
+        ]
+
+    def get_owner_name(self, obj):
+        """Get owner full name"""
+        if obj.owner and hasattr(obj.owner, 'first_name'):
+            return f"{obj.owner.first_name} {obj.owner.last_name}"
+        return None
+
+    def get_requested_by_name(self, obj):
+        """Get full name of user who requested disclosure"""
+        if obj.requested_by:
+            return f"{obj.requested_by.first_name} {obj.requested_by.last_name}"
+        return None
+
+    def get_state_display_name(self, obj):
+        """Get full state name from code"""
+        return obj.get_state_display_name()

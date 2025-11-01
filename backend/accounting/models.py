@@ -5900,3 +5900,175 @@ class AuditorExport(models.Model):
         if self.total_entries == 0:
             return 0
         return round((self.evidence_count / self.total_entries) * 100, 1)
+
+
+# ----------------------------------------------------------------------------
+# Sprint 22: Resale Disclosure Packages
+# ----------------------------------------------------------------------------
+
+class ResaleDisclosure(models.Model):
+    """
+    Resale disclosure package for unit sale.
+
+    State-compliant disclosure document including:
+    - Owner financial status
+    - Violation and lien disclosure
+    - Reserve study summary
+    - HOA governing documents
+
+    Revenue opportunity: $200-500 per package.
+    """
+
+    # Status choices
+    STATUS_REQUESTED = 'requested'
+    STATUS_GENERATING = 'generating'
+    STATUS_READY = 'ready'
+    STATUS_DELIVERED = 'delivered'
+    STATUS_FAILED = 'failed'
+
+    STATUS_CHOICES = [
+        (STATUS_REQUESTED, 'Requested'),
+        (STATUS_GENERATING, 'Generating'),
+        (STATUS_READY, 'Ready'),
+        (STATUS_DELIVERED, 'Delivered'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    tenant = models.ForeignKey(
+        'tenants.Tenant',
+        on_delete=models.CASCADE,
+        related_name='resale_disclosures'
+    )
+
+    unit = models.ForeignKey(
+        'Unit',
+        on_delete=models.PROTECT,
+        related_name='resale_disclosures'
+    )
+
+    owner = models.ForeignKey(
+        'Owner',
+        on_delete=models.PROTECT,
+        related_name='resale_disclosures'
+    )
+
+    # Request information
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='disclosure_requests'
+    )
+
+    requested_at = models.DateTimeField(auto_now_add=True)
+
+    # Buyer/Escrow information
+    buyer_name = models.CharField(max_length=200, blank=True)
+    escrow_agent = models.CharField(max_length=200, blank=True)
+    escrow_company = models.CharField(max_length=200, blank=True)
+    contact_email = models.EmailField()
+    contact_phone = models.CharField(max_length=20, blank=True)
+
+    # State compliance
+    state = models.CharField(
+        max_length=2,
+        help_text="State code (e.g., 'CA', 'TX', 'FL')"
+    )
+
+    template_version = models.CharField(
+        max_length=50,
+        default='v1.0',
+        help_text="State template version"
+    )
+
+    # Package details
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_REQUESTED
+    )
+
+    pdf_url = models.URLField(max_length=500, blank=True)
+    pdf_size_bytes = models.IntegerField(default=0)
+    pdf_hash = models.CharField(max_length=64, blank=True)  # SHA-256
+    page_count = models.IntegerField(default=0)
+
+    generated_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    # Financial snapshot at time of generation
+    current_balance = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00')
+    )
+
+    monthly_dues = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00')
+    )
+
+    special_assessments = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('0.00')
+    )
+
+    has_lien = models.BooleanField(default=False)
+    has_violations = models.BooleanField(default=False)
+    violation_count = models.IntegerField(default=0)
+
+    # Billing
+    fee_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal('250.00')
+    )
+
+    invoice = models.ForeignKey(
+        'Invoice',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='resale_disclosures'
+    )
+
+    payment_status = models.CharField(max_length=20, default='unpaid')
+
+    # Notes
+    notes = models.TextField(blank=True)
+    error_message = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'resale_disclosures'
+        ordering = ['-requested_at']
+        indexes = [
+            models.Index(fields=['tenant', '-requested_at']),
+            models.Index(fields=['unit']),
+            models.Index(fields=['status']),
+            models.Index(fields=['state']),
+        ]
+
+    def __str__(self):
+        return f"Resale Disclosure - {self.unit.unit_number} ({self.requested_at.date()})"
+
+    def get_state_display_name(self):
+        """Get full state name from code"""
+        state_names = {
+            'CA': 'California',
+            'TX': 'Texas',
+            'FL': 'Florida',
+        }
+        return state_names.get(self.state, self.state)
+
+    def mark_as_delivered(self):
+        """Mark disclosure as delivered"""
+        from django.utils import timezone
+        self.status = self.STATUS_DELIVERED
+        self.delivered_at = timezone.now()
+        self.save(update_fields=['status', 'delivered_at'])
