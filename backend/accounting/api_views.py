@@ -2,7 +2,7 @@
 Django REST Framework API views for accounting endpoints.
 """
 
-from rest_framework import viewsets, status, filters
+from rest_framework import viewsets, status, filters, permissions
 from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
@@ -34,7 +34,7 @@ from .models import (
     # Phase 3: Work Orders
     WorkOrderCategory, Vendor, WorkOrder, WorkOrderComment, WorkOrderAttachment, WorkOrderInvoice,
     # Phase 4: Retention Features
-    AuditorExport
+    AuditorExport, ResaleDisclosure
 )
 from .serializers import (
     AccountSerializer, FundSerializer, OwnerSerializer, UnitSerializer,
@@ -61,7 +61,7 @@ from .serializers import (
     WorkOrderCategorySerializer, VendorSerializer, WorkOrderSerializer, WorkOrderDetailSerializer,
     WorkOrderCommentSerializer, WorkOrderAttachmentSerializer, WorkOrderInvoiceSerializer,
     # Phase 4: Retention Features
-    AuditorExportSerializer
+    AuditorExportSerializer, ResaleDisclosureSerializer
 )
 
 
@@ -3045,7 +3045,7 @@ class AuditorExportViewSet(viewsets.ModelViewSet):
     - generate/ - Generate export file (async)
     - download/ - Download generated export file
     """
-    serializer_class = serializers.AuditorExportSerializer
+    serializer_class = AuditorExportSerializer
     permission_classes = [permissions.IsAuthenticated]
     filterset_fields = ['status', 'format', 'start_date', 'end_date']
     search_fields = ['title']
@@ -3054,7 +3054,7 @@ class AuditorExportViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         tenant = get_tenant(self.request)
-        return models.AuditorExport.objects.filter(tenant=tenant)
+        return AuditorExport.objects.filter(tenant=tenant)
 
     def perform_create(self, serializer):
         tenant = get_tenant(self.request)
